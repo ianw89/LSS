@@ -757,9 +757,9 @@ def get_weight_ntile(in_data):
 def add_weight_ntile(fb,logger=None,ranmin=0,nran=18,par='n',extradir='',tp='',nproc=9):
     from desitarget.internal import sharedmem
     fn = fb+'_NGC_clustering.dat.fits'
-    clus_dn = fitsio.read(fn.replace('global','dvs_ro').replace(tp,extradir+tp))
+    clus_dn = fitsio.read(fn.replace(tp,extradir+tp))
     fs = fb+'_SGC_clustering.dat.fits'
-    clus_ds = fitsio.read(fs.replace('global','dvs_ro').replace(tp,extradir+tp))
+    clus_ds = fitsio.read(fs.replace(tp,extradir+tp))
     clus_d = np.concatenate((clus_dn,clus_ds))
     weight_ntl,fkp_ntl = get_weight_ntile(clus_d)
     
@@ -771,9 +771,9 @@ def add_weight_ntile(fb,logger=None,ranmin=0,nran=18,par='n',extradir='',tp='',n
     
     def _parfun(rann):
         fn = fb+'_NGC_'+str(rann)+'_clustering.ran.fits'
-        clus_rn = fitsio.read(fn.replace('global','dvs_ro').replace(tp,extradir+tp) )
+        clus_rn = fitsio.read(fn.replace(tp,extradir+tp) )
         fs = fb+'_SGC_'+str(rann)+'_clustering.ran.fits'
-        clus_rs = fitsio.read(fs.replace('global','dvs_ro').replace(tp,extradir+tp) )
+        clus_rs = fitsio.read(fs.replace(tp,extradir+tp) )
         clus_r = np.concatenate((clus_rn,clus_rs))
         #weight_ntl,fkp_ntl = get_weight_ntile(clus_r) #just base it on data so it is equivalent for angular upweighting
     
@@ -819,7 +819,7 @@ def addnbar(fb,nran=18,bs=0.01,zmin=0.01,zmax=1.6,P0=10000,add_data=True,ran_sw=
     printlog('nz bin size is actually '+str(bs),logger)
     nzd = nzf[3] #column with nbar values
     fn = fb.replace(ran_sw,'')+'_clustering.dat.fits'
-    fd = Table(fitsio.read(fn.replace('global','dvs_ro')))
+    fd = Table(fitsio.read(fn))
     zl = fd['Z']
     nl = np.zeros(len(zl))
     zind = ((zl - zmin) / bs).astype(int)
@@ -843,7 +843,7 @@ def addnbar(fb,nran=18,bs=0.01,zmin=0.01,zmax=1.6,P0=10000,add_data=True,ran_sw=
             comp_ntl[i] = 1/mean_ntweight#*mean_fracobs_tiles
         
         if compmd == 'ran':
-            fran = fitsio.read(fb.replace('global','dvs_ro')+'_0_clustering.ran.fits',columns=['NTILE','FRAC_TLOBS_TILES'])
+            fran = fitsio.read(fb+'_0_clustering.ran.fits',columns=['NTILE','FRAC_TLOBS_TILES'])
             fttl = np.zeros(len(ntl))
             for i in range(0,len(ntl)): 
                 sel = fran['NTILE'] == ntl[i]
@@ -886,7 +886,7 @@ def addnbar(fb,nran=18,bs=0.01,zmin=0.01,zmax=1.6,P0=10000,add_data=True,ran_sw=
     printlog('Done with data.',logger=logger)
     def _parfun(rann):
         fn = fb+'_'+str(rann)+'_clustering.ran.fits'
-        fd = Table(fitsio.read(fn.replace('global','dvs_ro') ))
+        fd = Table(fitsio.read(fn))
         zl = fd['Z']
         nl = np.zeros(len(zl))
         zind = ((zl - zmin) / bs).astype(int)
@@ -1096,9 +1096,9 @@ def add_map_cols(fn,rann,logger=None,new_cols=['HALPHA', 'HALPHA_ERROR', 'CALIB_
     new_fn = '/dvs_ro/cfs/cdirs/desi/survey/catalogs/external_input_maps/mapvalues/randoms-1-'+str(rann)+'-skymapvalues.fits'
     mask_fn = '/dvs_ro/cfs/cdirs/desi/survey/catalogs/external_input_maps/maskvalues/randoms-1-'+str(rann)+'-skymapmask.fits'
    
-    printlog('reading '+fn.replace('global','dvs_ro'),logger)
-    df = Table(fitsio.read(fn.replace('global','dvs_ro')))
-    printlog('read '+fn.replace('global','dvs_ro'),logger)
+    printlog('reading '+fn,logger)
+    df = Table(fitsio.read(fn))
+    printlog('read '+fn,logger)
     
     col = 'SKYMAP_MASK'
     domask = True
@@ -1162,7 +1162,7 @@ def add_veto_col(fn,ran=False,tracer_mask='lrg',rann=0,tarver='targetsDR9v1.1.1'
     if ran:
         mask_fn = '/dvs_ro/cfs/cdirs/desi/survey/catalogs/main/LSS/randoms-1-'+str(rann)+tracer_mask+'imask.fits'
     maskf = fitsio.read(mask_fn)
-    df = fitsio.read(fn.replace('global','dvs_ro'))
+    df = fitsio.read(fn)
     if np.isin(tracer_mask+'_mask',list(df.dtype.names)):
         printlog('mask column already in '+fn,logger)
         if redo:
@@ -1277,7 +1277,7 @@ def apply_veto(fin,fout=None,ebits=None,zmask=False,maxp=3400,comp_only=False,re
     maxp is the maximum priority to keep in the data files
     '''
     if isinstance(fin, str):
-        ff = Table(fitsio.read(fin.replace('global','dvs_ro')))#+'full_noveto.'+dr+'.fits')
+        ff = Table(fitsio.read(fin))#+'full_noveto.'+dr+'.fits')
     else:
         ff = fin
         del fin
@@ -1681,7 +1681,7 @@ def write_LSShdf5_scratchcp(ff, outf,logger=None):
     #printlog('checking read of column ' + testcol, logger)
 
     try:
-        read_hdf5_blosc(outf.replace('global','dvs_ro'),columns=[testcol])
+        read_hdf5_blosc(outf,columns=[testcol])
         df = 1
     except:
         printwarn('read failed, copy failed?! check temporary file '+tmpfn, logger)
@@ -1757,7 +1757,7 @@ def write_LSS_scratchcp(ff, outf, comments=None,extname='LSS',logger=None):
     #printlog('checking read of column ' + testcol, logger)
 
     try:
-        fitsio.read(outf.replace('global','dvs_ro'),columns=(testcol))
+        fitsio.read(outf,columns=(testcol))
         df = 1
     except:
         printwarn('read failed, copy failed?! check temporary file '+tmpfn, logger)

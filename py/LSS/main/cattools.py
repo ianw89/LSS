@@ -4321,7 +4321,7 @@ def mkclusran(flin,fl,rann,rcols=['Z','WEIGHT'],zmask=False,utlid=False,ebits=No
         #else:
         if add_tlobs == 'y':
             ran_cols.append('TILES')
-        else:
+        elif compmd != 'altmtl':
             ran_cols.append('FRAC_TLOBS_TILES')
         #ffc = Table(fitsio.read(in_fname.replace('global','dvs_ro'),columns=ran_cols))
         ffc = Table(fitsio.read(in_fname,columns=ran_cols))
@@ -4337,15 +4337,21 @@ def mkclusran(flin,fl,rann,rcols=['Z','WEIGHT'],zmask=False,utlid=False,ebits=No
             ffc = add_tlobs_ran_array(ffc,tlf,logger)
     else:
         ffc = flin
-        del flin
-        ran_cols = ['RA','DEC','TARGETID','TILEID','NTILE','PHOTSYS','FRAC_TLOBS_TILES']
+        #del flin
+        ran_cols = ['RA','DEC','TARGETID','TILEID','NTILE','PHOTSYS']
+        if compmd != 'altmtl':
+            ran_cols.append('FRAC_TLOBS_TILES')
         ffc.keep_columns(ran_cols)
         
+
+    # TODO remove all FRAC_TLOBS_TILES unless needed ??
     
     if return_cat == 'y' and nosplit=='y':
-        tempcols = ['RA','DEC','TARGETID','NTILE','FRAC_TLOBS_TILES','PHOTSYS']
+        tempcols = ['RA','DEC','TARGETID','NTILE','PHOTSYS']
         if 'WEIGHT_NT_MISSPW' in ffc.columns:
             tempcols.append('WEIGHT_NT_MISSPW')
+        if 'FRAC_TLOBS_TILES' in ffc.columns:
+            tempcols.append('FRAC_TLOBS_TILES')
         #this option will then pass the arrays to the clusran_resamp_arrays function
         ffc.keep_columns(tempcols)
         return ffc
@@ -4417,10 +4423,11 @@ def mkclusran(flin,fl,rann,rcols=['Z','WEIGHT'],zmask=False,utlid=False,ebits=No
         else:
             fcdn = Table(np.copy(clus_arrays[ind]))
         fcdn.rename_column('TARGETID', 'TARGETID_DATA')
-        kc = ['RA','DEC','Z','WEIGHT','TARGETID','NTILE','FRAC_TLOBS_TILES','PHOTSYS']
+        kc = ['RA','DEC','Z','WEIGHT','TARGETID','NTILE','PHOTSYS']
         if 'WEIGHT_NT_MISSPW' in ffc.columns:
             kc.append('WEIGHT_NT_MISSPW')
-
+        if 'FRAC_TLOBS_TILES' in ffc.columns:
+            kc.append('FRAC_TLOBS_TILES')
         rcols = np.array(rcols)
         wc = np.isin(rcols,list(fcdn.dtype.names))
         rcols = rcols[wc]
