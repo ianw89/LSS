@@ -45,46 +45,43 @@ from LSS.globals import main
 
 
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--ccut",help="a string that is used define your subsample",default='FSFABSmagwecorr-R-20.5-umzgper-50')
+parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+parser.add_argument("--ccut", help="a string that is used define your subsample", default='FSFABSmagwecorr-R-20.5-umzgper-50')
 #arguments to find input data
-parser.add_argument("--input_tracer", help="tracer type that subsample will come from")
-parser.add_argument("--basedir", help="base directory for input, default is SCRATCH",default='/global/cfs/cdirs/desi/survey/catalogs/')
-parser.add_argument("--outdir", help="directory for out, default is SCRATCH",default=os.environ['SCRATCH'])
-parser.add_argument("--version", help="catalog version for input",default='v2')
-parser.add_argument("--survey", help="e.g., Y1, DA2",default='DA2')
-parser.add_argument("--verspec",help="version for redshifts",default='loa-v1')
-parser.add_argument("--use_map_veto", help="string to include in full file name denoting whether map veto was applied",default='_HPmapcut')
+parser.add_argument("--input_tracer", help="tracer type that subsample will come from", required=True)
+parser.add_argument("--basedir", help="base directory for input, a versioning structure is expected under it", default='/global/cfs/cdirs/desi/survey/catalogs/')
+parser.add_argument("--outdir", help="directory for output, the catalogs will be saved directly under it", default=os.environ['SCRATCH'])
+parser.add_argument("--version", help="catalog version for input", default='v2')
+parser.add_argument("--survey", help="e.g., Y1, DA2", default='DA2')
+parser.add_argument("--verspec", help="version for redshifts", default='loa-v1')
+parser.add_argument("--use_map_veto", help="string to include in full file name denoting whether map veto was applied", default='_HPmapcut')
 #parser.add_argument("--extra_clus_dir", help="an optional extra layer of directory structure for clustering catalog",default='')
 
-parser.add_argument("--compmd",help="use altmtl to use PROB_OBS for completeness weights in clustering catalogs",default='not_altmtl')
+parser.add_argument("--compmd", choices=['not_altmtl', 'altmtl', 'n'], help="use altmtl to use PROB_OBS for completeness weights in clustering catalogs", default='not_altmtl')
 
 #what steps to run (set all to y to get NGC/SGC clustering catalogs output)
-parser.add_argument("--mkfulldat", help="whether to make the initial cut file that gets used throughout",default='n')
-parser.add_argument("--clusd", help="make the 'clustering' catalog intended for paircounts",default='n')
-parser.add_argument("--clusran", help="make the random clustering files; these are cut to a small subset of columns",default='n')
-parser.add_argument("--minr", help="minimum number for random files",default=0,type=int)
-parser.add_argument("--maxr", help="maximum for random files, 18 are available (use parallel script for all)",default=18,type=int) 
-parser.add_argument("--nz", help="get n(z) for type and all subtypes",default='n')
-parser.add_argument("--splitGC",help="convert to NGC/SGC catalogs",default='n')
+parser.add_argument("--mkfulldat", choices=['n', 'y'], help="whether to make the initial cut file that gets used throughout", default='n')
+parser.add_argument("--clusd", choices=['n', 'y'], help="make the 'clustering' catalog intended for paircounts", default='n')
+parser.add_argument("--clusran", choices=['n', 'y'], help="make the random clustering files; these are cut to a small subset of columns", default='n')
+parser.add_argument("--minr", help="minimum number for random files", default=0, type=int)
+parser.add_argument("--maxr", help="maximum number for random files (plus one), 18 (0 through 17) are available (it is worth running all in parallel, see the option below)", default=18, type=int)
+parser.add_argument("--nz", choices=['n', 'y'], help="get n(z) for type and all subtypes", default='n')
+parser.add_argument("--splitGC", choices=['n', 'y'], help="convert to NGC/SGC catalogs", default='n')
 
 #options for linear imaging systematic regressions
-parser.add_argument("--imsys_clus",help="add weights for imaging systematics using eboss method, applied to clustering catalogs?",default='n')
-parser.add_argument("--imsys_clus_ran",help="add weights for imaging systematics using eboss method, applied to clustering catalogs, to randoms?",default='n')
-parser.add_argument("--nran4imsys",help="number of random files to using for linear regression",default=1,type=int)
-parser.add_argument("--usemaps", help="the list of maps to use; defaults to what is set by globals", type=str, nargs='*',default=None)
-parser.add_argument("--imsys_nside",help="healpix nside used for imaging systematic regressions",default=256,type=int)
+parser.add_argument("--imsys_clus", choices=['n', 'y'], help="add weights for imaging systematics using eboss method, applied to clustering catalogs?", default='n')
+parser.add_argument("--imsys_clus_ran", choices=['n', 'y'], help="add weights for imaging systematics using eboss method, applied to clustering catalogs, to randoms?", default='n')
+parser.add_argument("--nran4imsys", help="number of random files to using for linear regression", default=1, type=int)
+parser.add_argument("--usemaps", help="the list of maps to use; defaults to what is set by globals", type=str, nargs='*', default=None)
+parser.add_argument("--imsys_nside", help="healpix nside used for imaging systematic regressions", default=256, type=int)
+parser.add_argument("--imsys_zbin", choices=['n', 'y', 'hi'], help="use separate redshift bins for imaging systematic regressions? (or a wider redshift range for BGS)", default='n')
 
-parser.add_argument("--par", help="run different random number in parallel?",default='y')
+parser.add_argument("--par", choices=['y', 'n'], help="run different random numbers in parallel?", default='y')
 
 
 args = parser.parse_args()
 common.printlog(str(args),logger)
 
-basedir = args.basedir
-version = args.version
-specrel = args.verspec
-ccut = args.ccut
 rm = int(args.minr)
 rx = int(args.maxr)
 
@@ -100,19 +97,14 @@ zmax = mainp.zmax
 
 #set up input directory
 
-maindir = basedir +'/'+args.survey+'/LSS/'
+dirin = os.path.join(args.basedir, args.survey, 'LSS', args.verspec, 'LSScats', args.version) + '/'
 
-ldirspec = maindir+specrel+'/'
-
-dirin = ldirspec+'LSScats/'+version+'/'
-
-lssmapdirout = dirin+'/hpmaps/' #maps for imaging systematics regressions
+lssmapdirout = dirin + 'hpmaps/' #maps for imaging systematics regressions
     
 if not os.path.exists(dirin):
-    
-    sys.exit('issue with '+dirin+' it does not exist')
+    raise RuntimeError('issue with '+dirin+': it does not exist')
 
-common.printlog('running subsampling '+dirin+args.input_tracer +' catalogs according to '+ccut,logger)
+common.printlog('running subsampling '+dirin+args.input_tracer +' catalogs according to '+args.ccut,logger)
 
 #parse arguments to toggle options
     
@@ -153,7 +145,12 @@ if args.mkfulldat == 'y':
     common.printlog('reading full data file '+dirin+args.input_tracer+'_full'+args.use_map_veto+'.dat.fits',logger)
     fulldat = fitsio.read(dirin+args.input_tracer+'_full'+args.use_map_veto+'.dat.fits')
     
-    
+    def is_float(s):
+        try:
+            float(s)
+            return True
+        except ValueError:
+            return False
     
     #for selections based on fastspecfit; other cases can be written similarly
     if 'FSFABSmag' in args.ccut:
@@ -200,9 +197,9 @@ if args.mkfulldat == 'y':
         #add any additional selections here
         
         #write output to new "full" catalog at your defined location
-    elif args.ccut == '-21.35': #the sample used in DR2 BAO analysis
-        #don't use any k-correction at all, yields ~constant density
-        common.printlog('applying the -21.35 selection',logger)
+    elif is_float(args.ccut): # following the example of the -21.35 cut used for BGS_BRIGHT in DR2 BAO analysis, which yielded a ~constant density sample, this option allows you to apply a simple cut on absolute magnitude (below the given value) without any k-correction, which yields a ~constant density sample
+        # might want to check that the float value is negative or within some reasonable range, although it probably depends on the tracer and redshift range
+        common.printlog('applying the '+args.ccut+' selection on absolute magnitude without k-correction',logger)
         from LSS.tabulated_cosmo import TabulatedDESI
         cosmo = TabulatedDESI()
         dis_dc = cosmo.comoving_radial_distance
@@ -214,13 +211,14 @@ if args.mkfulldat == 'y':
         cfluxr = fulldat['FLUX_R']/fulldat['MW_TRANSMISSION_R']
         r_dered = 22.5 - 2.5*np.log10(cfluxr)
         abr = r_dered -dm
-        sel = abr < -21.35
+        sel = abr < float(args.ccut)
         sel &= z2use < 2
 
-    elif args.ccut == 'zcmb-21.35': #the sample used in DR2 BAO analysis
-        #don't use any k-correction at all, yields ~constant density
-        common.printlog('applying the -21.35 selection and correcting redshifts to the cmb frame',logger)
-        tracer_out = tracer_out.replace('zcmb-21.35','-21.35_zcmb')
+    elif args.ccut.startswith('zcmb') and is_float(args.ccut[len('zcmb'):]): # like the above absolute magnitude cut without k-correction, but with redshifts corrected to the CMB frame
+        # might want to check that the float value is negative or within some reasonable range, although it probably depends on the tracer and redshift range
+        ccut_mag_str = args.ccut[len('zcmb'):]
+        common.printlog('applying the '+ccut_mag_str+' selection on absolute magnitude without k-correction and correcting redshifts to the cmb frame',logger)
+        tracer_out = tracer_out.replace('zcmb'+ccut_mag_str, ccut_mag_str+'_zcmb')
         from LSS.tabulated_cosmo import TabulatedDESI
         cosmo = TabulatedDESI()
         dis_dc = cosmo.comoving_radial_distance
@@ -237,12 +235,12 @@ if args.mkfulldat == 'y':
         cfluxr = fulldat['FLUX_R']/fulldat['MW_TRANSMISSION_R']
         r_dered = 22.5 - 2.5*np.log10(cfluxr)
         abr = r_dered -dm
-        sel = abr < -21.35
+        sel = abr < float(ccut_mag_str)
         sel &= z2use < 2
         
 
     else:
-        sys.exit(args.ccut+' should not have made it here, whatever you entered for --ccut did not trigger a cut, check code')
+        raise ValueError(args.ccut+' should not have made it here, whatever you entered for --ccut did not trigger a cut, check code')
     fout = args.outdir+'/'+tracer_out+'_full'+args.use_map_veto+'.dat.fits'
     common.write_LSS_scratchcp(fulldat[sel],fout,logger=logger)
     
@@ -333,26 +331,14 @@ if args.splitGC == 'y':
 #4) refactors the weights (section 8.2 of the KP3 paper arXiv:2411.12020)
 #5) writes the NGC/SGC clustering catalogs back out for data and randoms
 #It needs to take inputs for completeness and mean weight as a function of NTILE, of the non-subsampled catalog, so that the angular upweighting option can remain consistent
-def get_ntile_info(fd):
-    ntl = np.unique(fd['NTILE'])
-    comp_ntl = np.ones(len(ntl))
-    weight_ntl = np.ones(len(ntl))
-    for i in range(0,len(ntl)):
-        sel = fd['NTILE'] == ntl[i]
-        mean_ntweight = np.mean(fd['WEIGHT_COMP'][sel])        
-        weight_ntl[i] = mean_ntweight
-        comp_ntl[i] = 1/mean_ntweight#*mean_fracobs_tiles
-        
-        if args.compmd != 'altmtl':
-            fttl = np.zeros(len(ntl))
-            for i in range(0,len(ntl)): 
-                sel = fd['NTILE'] == ntl[i]
-                mean_fracobs_tiles = np.mean(fd[sel]['FRAC_TLOBS_TILES'])
-                fttl[i] = mean_fracobs_tiles
-        else:
-            fttl = np.ones(len(ntl))
-    comp_ntl = comp_ntl*fttl
-    return comp_ntl,weight_ntl
+def get_ntile_info(clus_orig_fname):
+    fd = fitsio.read(clus_orig_fname, columns=['NTILE', 'WEIGHT_COMP', 'FRAC_TLOBS_TILES'])
+    weight_ntl = np.bincount(fd['NTILE']-1, weights=fd['WEIGHT_COMP']) / np.bincount(fd['NTILE']-1) # mean of WEIGHT_COMP for each (positive integer) NTILE in the data. Note that the NTILE values are shifted down by 1 to avoid guaranteed division by zero for NTILE=0
+    comp_ntl = 1 / weight_ntl # the completeness is the inverse of the mean weight (for each NTILE). Indexed by NTILE-1
+    if args.compmd != 'altmtl':
+        fttl = np.bincount(fd['NTILE']-1, weights=fd['FRAC_TLOBS_TILES']) / np.bincount(fd['NTILE']-1) # mean of FRAC_TLOBS_TILES for each (positive integer) NTILE in data (although shouldn't this be computed in randoms?). Note that the NTILE values are shifted down by 1 to avoid guaranteed division by zero for NTILE=0
+        comp_ntl *= fttl # if not using altmtl, also multiply by the mean FRAC_TLOBS_TILES for each NTILE to get the completeness. Both are indexed by NTILE-1
+    return comp_ntl, weight_ntl # both are indexed by NTILE-1 as common.addnbar expects
  
 if args.nz == 'y':
     for reg in regions:#allreg:
@@ -367,8 +353,8 @@ if args.nz == 'y':
         extra_dir = 'nonKP'
         if args.compmd == 'altmtl':
             extra_dir = 'PIP'
-        clus_orig = fitsio.read(dirin+'/'+extra_dir+'/'+args.input_tracer+'_'+reg+'_clustering.dat.fits')
-        comp_ntl,weight_ntl = get_ntile_info(clus_orig)                        
+        clus_orig = dirin+'/'+extra_dir+'/'+args.input_tracer+'_'+reg+'_clustering.dat.fits'
+        comp_ntl, weight_ntl = get_ntile_info(clus_orig)
         common.addnbar(fb,bs=dz,zmin=zmin,zmax=zmax,P0=P0,nran=nran,par=args.par,compmd=nzcompmd,comp_ntl=comp_ntl,weight_ntl=weight_ntl,logger=logger)
 
 # determine linear weights for imaging systematics
@@ -394,7 +380,12 @@ if args.imsys_clus == 'y':
         else:
             zrl = [(0.4,1.1)]  
     if args.input_tracer[:3] == 'BGS':
-        zrl = [(0.1,0.4)]
+        if args.imsys_zbin == 'hi':
+            zrl = [(0,0.5)]
+        elif args.imsys_zbin == 'y':
+            zrl = [(0,0.3),(0.3,0.5)]    
+        else:
+            zrl = [(0.1,0.4)]
 
     
     #get maps to regress against
@@ -434,8 +425,8 @@ if args.imsys_clus == 'y':
         if reg == 'DES' or reg == 'SnotDES':
             regu = 'S'
         mptr = args.input_tracer
-        if args.input_tracer == 'BGS_ANY':
-            mptr = 'BGS_BRIGHT' #bright and any cover the same footprint so the same map is used for both
+        if args.input_tracer[:3] == 'BGS':
+            mptr = 'BGS_BRIGHT' #bright and any/faint cover the same footprint so the same map is used for both
         pwf = lssmapdirout+mptr+'_mapprops_healpix_nested_nside256_'+regu+'.fits'
         sys_tab = Table.read(pwf)
         cols = list(sys_tab.dtype.names)
