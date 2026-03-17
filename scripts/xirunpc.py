@@ -261,9 +261,9 @@ def get_edges(corr_type='smu', bin_type='lin'):
         else:
             read = np.loadtxt(bin_type)
             if read.ndim == 1:
-                return (read, np.linspace(-40., 40., 81))
+                return (read, np.linspace(-40., 40., 81)) # just rp edges read
             elif read.ndim == 2:
-                return (read[0], read[1])
+                return (read[0], read[1]) # rp edges, pi edges
             else:
                 raise ValueError('if bin_type is a file path, the file must be text readable as a 1d or 2d array of values.')
             

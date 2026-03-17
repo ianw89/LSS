@@ -2,7 +2,7 @@
 #Expectation is that users will copy this and create their own criteria, following the example
 
 # Ian Example:
-#srun -N 1 -C cpu -t 04:00:00 --qos interactive --account desi python scripts/mkCat_subsamp_ian.py --input_tracer BGS_BRIGHT --mkfulldat y --clusd y --clusran y --nz y --splitGC y --ccut FSFABSmag-R-19-20 --extracut=Q  --survey Y1 --verspec iron --version v1.5pip  --imsys_clus y --imsys_clus_ran y --outdir /global/cfs/cdirs/desi/users/ianw89/newclustering/Y1/LSS/iron/LSScats/v1.5pip
+#srun -N 1 -C cpu -t 04:00:00 --qos interactive --account desi python scripts/mkCat_subsamp_minef.py --input_tracer BGS_BRIGHT --mkfulldat y --clusd y --clusran y --nz y --splitGC y --ccut FSFABSmag-R-19-20 --extracut=Q  --survey Y1 --verspec iron --version v1.5pip  --imsys_clus y --imsys_clus_ran y --outdir /global/cfs/cdirs/desi/users/ianw89/newclustering/Y1/LSS/iron/LSScats/v1.5pip
 
 import sys
 import os
@@ -12,7 +12,6 @@ import argparse
 from astropy.table import Table,join,unique,vstack
 
 import logging
-
 from pycorr.utils import setup_logging
 logger = logging.getLogger('mkCat')
 
@@ -26,39 +25,42 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--extracut",help="Q (quiescent) or SF (star-forming) or ALL", default='ALL')
 parser.add_argument("--passcut",help="a value of NTILE_MINE to cut to", default=0, type=int)
 parser.add_argument("--ccut",help="a string that is used define your subsample", default='') 
+parser.add_argument("--zmin",help="a redshift cut to apply when making clustering catalogs, default is to apply what is in globals.py", default=None, type=float)
+parser.add_argument("--zmax",help="a redshift cut to apply when making clustering catalogs, default is to apply what is in globals.py", default=None, type=float)
 parser.add_argument("--pcut",help="another gal property to cut on", default='') #COLUMNNAME-LOWERBOUND-UPPERBOUND
 
 #arguments to find input data
-parser.add_argument("--input_tracer", help="tracer type that subsample will come from")
-parser.add_argument("--basedir", help="base directory for input, default is SCRATCH",default='/global/cfs/cdirs/desi/survey/catalogs/')
-parser.add_argument("--outdir", help="directory for out, default is SCRATCH",default=os.environ['SCRATCH'])
-parser.add_argument("--version", help="catalog version for input",default='v1.1')
-parser.add_argument("--survey", help="e.g., Y1, DA2",default='DA2')
-parser.add_argument("--verspec",help="version for redshifts",default='loa-v1')
-parser.add_argument("--use_map_veto", help="string to include in full file name denoting whether map veto was applied",default='_HPmapcut')
+parser.add_argument("--input_tracer", help="tracer type that subsample will come from", required=True)
+parser.add_argument("--basedir", help="base directory for input, a versioning structure is expected under it", default='/global/cfs/cdirs/desi/survey/catalogs/')
+parser.add_argument("--outdir", help="directory for output, the catalogs will be saved directly under it", default=os.environ['SCRATCH'])
+parser.add_argument("--version", help="catalog version for input", default='v2')
+parser.add_argument("--survey", help="e.g., Y1, DA2", default='DA2')
+parser.add_argument("--verspec", help="version for redshifts", default='loa-v1')
+parser.add_argument("--use_map_veto", help="string to include in full file name denoting whether map veto was applied", default='_HPmapcut')
 #parser.add_argument("--extra_clus_dir", help="an optional extra layer of directory structure for clustering catalog",default='')
 
-parser.add_argument("--compmd",help="use altmtl to use PROB_OBS for completeness weights in clustering catalogs",default='not_altmtl')
+parser.add_argument("--compmd", choices=['not_altmtl', 'altmtl', 'n'], help="use altmtl to use PROB_OBS for completeness weights in clustering catalogs", default='not_altmtl')
 
 #what steps to run (set all to y to get NGC/SGC clustering catalogs output)
-parser.add_argument("--mkfulldat", help="whether to make the initial cut file that gets used throughout",default='n')
-parser.add_argument("--clusd", help="make the 'clustering' catalog intended for paircounts",default='n')
-parser.add_argument("--clusran", help="make the random clustering files; these are cut to a small subset of columns",default='n')
-parser.add_argument("--minr", help="minimum number for random files",default=0,type=int)
-parser.add_argument("--maxr", help="maximum for random files, 18 are available (use parallel script for all)",default=18,type=int) 
-parser.add_argument("--nz", help="get n(z) for type and all subtypes",default='n')
-parser.add_argument("--splitGC",help="convert to NGC/SGC catalogs",default='n')
+parser.add_argument("--mkfulldat", choices=['n', 'y'], help="whether to make the initial cut file that gets used throughout", default='n')
+parser.add_argument("--clusd", choices=['n', 'y'], help="make the 'clustering' catalog intended for paircounts", default='n')
+parser.add_argument("--clusran", choices=['n', 'y'], help="make the random clustering files; these are cut to a small subset of columns", default='n')
+parser.add_argument("--minr", help="minimum number for random files", default=0, type=int)
+parser.add_argument("--maxr", help="maximum number for random files (plus one), 18 (0 through 17) are available (it is worth running all in parallel, see the option below)", default=18, type=int)
+parser.add_argument("--nz", choices=['n', 'y'], help="get n(z) for type and all subtypes", default='n')
+parser.add_argument("--splitGC", choices=['n', 'y'], help="convert to NGC/SGC catalogs", default='n')
 
 #options for linear imaging systematic regressions
-parser.add_argument("--imsys_clus",help="add weights for imaging systematics using eboss method, applied to clustering catalogs?",default='n')
-parser.add_argument("--imsys_clus_ran",help="add weights for imaging systematics using eboss method, applied to clustering catalogs, to randoms?",default='n')
-parser.add_argument("--nran4imsys",help="number of random files to using for linear regression",default=1,type=int)
-parser.add_argument("--usemaps", help="the list of maps to use; defaults to what is set by globals", type=str, nargs='*',default=None)
-parser.add_argument("--imsys_nside",help="healpix nside used for imaging systematic regressions",default=256,type=int)
+parser.add_argument("--imsys_clus", choices=['n', 'y'], help="add weights for imaging systematics using eboss method, applied to clustering catalogs?", default='n')
+parser.add_argument("--imsys_clus_ran", choices=['n', 'y'], help="add weights for imaging systematics using eboss method, applied to clustering catalogs, to randoms?", default='n')
+parser.add_argument("--nran4imsys", help="number of random files to using for linear regression", default=1, type=int)
+parser.add_argument("--usemaps", help="the list of maps to use; defaults to what is set by globals", type=str, nargs='*', default=None)
+parser.add_argument("--imsys_nside", help="healpix nside used for imaging systematic regressions", default=256, type=int)
+parser.add_argument("--imsys_zbin", choices=['n', 'y', 'hi'], help="use separate redshift bins for imaging systematic regressions? (or a wider redshift range for BGS)", default='n')
 
-parser.add_argument("--par", help="run different random number in parallel?",default='y')
+parser.add_argument("--par", choices=['y', 'n'], help="run different random numbers in parallel?", default='y')
+
 setup_logging()
-
 
 args = parser.parse_args()
 common.printlog(str(args),logger)
@@ -79,6 +81,11 @@ dchi2 = mainp.dchi2 #used for good redshift selection when making clustering cat
 #clustering catalogs will have these redshift bounds:
 zmin = mainp.zmin
 zmax = mainp.zmax
+if args.zmax != None:
+    zmax = args.zmax
+if args.zmin != None:
+    zmin = args.zmin
+common.printlog(f'zmin = {zmin}, zmax = {zmax}', logger)
 
 if survey != 'SV3' and survey != 'Y1' and survey != 'DA2' and survey != 'Y3':
     common.printwarn('survey not recognized, directory structure may not be regonized', logger)
@@ -368,27 +375,16 @@ if args.splitGC == 'y':
 #3) calculates the FKP weights based on NX
 #4) refactors the weights (section 8.2 of the KP3 paper arXiv:2411.12020)
 #5) writes the NGC/SGC clustering catalogs back out for data and randoms
-def get_ntile_info(fd):
-    ntl = np.unique(fd['NTILE'])
-    comp_ntl = np.ones(len(ntl))
-    weight_ntl = np.ones(len(ntl))
-    for i in range(0,len(ntl)):
-        sel = fd['NTILE'] == ntl[i]
-        mean_ntweight = np.mean(fd['WEIGHT_COMP'][sel])        
-        weight_ntl[i] = mean_ntweight
-        comp_ntl[i] = 1/mean_ntweight#*mean_fracobs_tiles
-        
-        if args.compmd != 'altmtl':
-            fttl = np.zeros(len(ntl))
-            for i in range(0,len(ntl)): 
-                sel = fd['NTILE'] == ntl[i]
-                mean_fracobs_tiles = np.mean(fd[sel]['FRAC_TLOBS_TILES'])
-                fttl[i] = mean_fracobs_tiles
-        else:
-            fttl = np.ones(len(ntl))
-    comp_ntl = comp_ntl*fttl
-    return comp_ntl,weight_ntl
-
+#It needs to take inputs for completeness and mean weight as a function of NTILE, of the non-subsampled catalog, so that the angular upweighting option can remain consistent
+def get_ntile_info(clus_orig_fname):
+    fd = fitsio.read(clus_orig_fname, columns=['NTILE', 'WEIGHT_COMP', 'FRAC_TLOBS_TILES'])
+    weight_ntl = np.bincount(fd['NTILE']-1, weights=fd['WEIGHT_COMP']) / np.bincount(fd['NTILE']-1) # mean of WEIGHT_COMP for each (positive integer) NTILE in the data. Note that the NTILE values are shifted down by 1 to avoid guaranteed division by zero for NTILE=0
+    comp_ntl = 1 / weight_ntl # the completeness is the inverse of the mean weight (for each NTILE). Indexed by NTILE-1
+    if args.compmd != 'altmtl':
+        fttl = np.bincount(fd['NTILE']-1, weights=fd['FRAC_TLOBS_TILES']) / np.bincount(fd['NTILE']-1) # mean of FRAC_TLOBS_TILES for each (positive integer) NTILE in data (although shouldn't this be computed in randoms?). Note that the NTILE values are shifted down by 1 to avoid guaranteed division by zero for NTILE=0
+        comp_ntl *= fttl # if not using altmtl, also multiply by the mean FRAC_TLOBS_TILES for each NTILE to get the completeness. Both are indexed by NTILE-1
+    return comp_ntl, weight_ntl # both are indexed by NTILE-1 as common.addnbar expects
+ 
 if args.nz == 'y':
     for reg in regions:#allreg:
         #file names
@@ -399,24 +395,15 @@ if args.nz == 'y':
         #make n(z)
         common.mknz(fcd,fcr,fout,bs=dz,zmin=zmin,zmax=zmax,compmd=nzcompmd)
         #do steps 2-5 above
-        if survey == 'Y1':
-            if args.compmd != 'altmtl' and version.endswith('pip'):
-                path = f"{dirin.replace('pip', '')}/{args.input_tracer}_{reg}_clustering.dat.fits"
-            elif args.compmd == 'altmtl' and not version.endswith('pip'):
-                path = f"{dirin.replace(version, version+'pip')}/{args.input_tracer}_{reg}_clustering.dat.fits"
-            else:
-                path = f"{dirin}/{args.input_tracer}_{reg}_clustering.dat.fits"
-        if survey == 'SV3':
-            r = 'N' if reg == 'NGC' else 'S' # Slightly different convention here?
-            path = f"{dirin}/{args.input_tracer}_{r}_clustering.dat.fits"
-        else:
+        # For Y3 this is dir structure
+        if survey == 'DA2':
             extra_dir = 'nonKP'
             if args.compmd == 'altmtl':
                 extra_dir = 'PIP'
-            path = f"{dirin}/{extra_dir}/{args.input_tracer}_{reg}_clustering.dat.fits"
-
-        clus_orig = fitsio.read(path)
-        comp_ntl,weight_ntl = get_ntile_info(clus_orig)                        
+            clus_orig = dirin+'/'+extra_dir+'/'+args.input_tracer+'_'+reg+'_clustering.dat.fits'
+        else:
+            clus_orig = dirin+'/'+args.input_tracer+'_clustering.dat.fits'
+        comp_ntl, weight_ntl = get_ntile_info(clus_orig)
         common.addnbar(fb,bs=dz,zmin=zmin,zmax=zmax,P0=P0,nran=nran,par=args.par,compmd=nzcompmd,comp_ntl=comp_ntl,weight_ntl=weight_ntl,logger=logger)
 
 # determine linear weights for imaging systematics
@@ -441,7 +428,7 @@ if args.imsys_clus == 'y':
             zrl = [(0.4,0.6),(0.6,0.8),(0.8,1.1)] 
         else:
             zrl = [(0.4,1.1)]  
-    if args.input_tracer[:3] == 'BGS':
+    if args.input_tracer[:3] == 'BGS': # Ian's custom z range for group catalog
         zrl = [(0.001,0.5)]
 
     
@@ -482,9 +469,10 @@ if args.imsys_clus == 'y':
         if reg == 'DES' or reg == 'SnotDES':
             regu = 'S'
         mptr = args.input_tracer
-        if args.input_tracer == 'BGS_ANY':
-            mptr = 'BGS_BRIGHT' #bright and any cover the same footprint so the same map is used for both
-        sys_tab = Table.read(lssmapsdir+mptr+'_mapprops_healpix_nested_nside256_'+regu+'.fits')
+        if args.input_tracer[:3] == 'BGS':
+            mptr = 'BGS_BRIGHT' #bright and any/faint cover the same footprint so the same map is used for both
+        pwf = lssmapsdir+mptr+'_mapprops_healpix_nested_nside256_'+regu+'.fits'
+        sys_tab = Table.read(pwf)
         cols = list(sys_tab.dtype.names)
         for col in cols:
             #apply extinction corrections to depth to get total depth estimate
