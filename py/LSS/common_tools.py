@@ -31,7 +31,7 @@ def thphi2radec(theta, phi):
     return 180./np.pi*phi, -(180./np.pi*theta-90)
 
 
-def expand_ran(in_ran_fn, parent_ran_fn, in_clus_fileroot, rancols=['TARGETID', 'RA', 'DEC'], datacols=['TARGETID', 'Z'], logger=None):
+def expand_ran(in_ran_fn, parent_ran_fn=None, rancols=['TARGETID', 'RA', 'DEC'], datacols=['TARGETID', 'Z'], logger=None):
     # function to add columns to randoms, most useful for mock randoms where the same column values are used
     # assumes data is saved in the LSS h5 format; could edit to allow functionality for fits or other formats
     '''
@@ -40,9 +40,7 @@ def expand_ran(in_ran_fn, parent_ran_fn, in_clus_fileroot, rancols=['TARGETID', 
     in_ran_fn : string 
         full path to input randoms to expand, in LSS h5 format, containing at least the columns 'TARGETID','TARGETID_DATA','WEIGHT','NX'
     parent_ran_fn : string 
-        full path to randoms that are a superset of data to expand and contain at least TARGETID, RA, DEC, in LSS h5 format
-    in_clus_fileroot : string
-        directory + tracer for clustering catalogs (allowing NGC/SGC to be loaded by simply adding +'_'+reg+'_clustering.dat.h5'), in LSS h5 format
+        full path to randoms that are a superset of data to expand and contain at least TARGETID, RA, DEC, in LSS h5 format; if None, found automatically
     rancols : list 
         a list of the column names to add to the input table from the parent random catalog via TARGETID match
     datacols : list 
@@ -53,6 +51,27 @@ def expand_ran(in_ran_fn, parent_ran_fn, in_clus_fileroot, rancols=['TARGETID', 
     '''
 
     # t0 = time.time()
+    rfn_split = in_ran_fn.split('/')
+    input_dir = ''
+    for i in range(0,len(rfn_split)-1):
+        input_dir += rfn_split[i]+'/'
+    
+    ran_ind = rfn_split[-1].split('_')[-2]
+    reg = rfn_split[-1].split('_')[-3]
+    tracer = rfn_split[-1].split('_')[0]
+    if len(rfn_split[-1].split('_')) > 4:
+        tracer += '_'+rfn_split[-1].split('_')[1]
+    in_clus_fileroot = input_dir + tracer
+    if parent_ran_fn is None:
+        if 'DA2' in in_ran_fn:
+            pdir = '/dvs_ro/cfs/cdirs/desi/survey/catalogs/DA2/LSS/loa-v1/LSScats/v2/'
+        else:
+            print('Only DA2 is supported right now, code will fail if you do not explicitly set parent_ran_fn!!!')
+        if 'BGS' in in_ran_fn:
+            parent_ran_fn = pdir + 'bright_'+ran_ind+'_full_noveto.ran.h5'
+        else:
+            parent_ran_fn = pdir + 'dark_'+ran_ind+'_full_noveto.ran.h5' 
+    print('loading '+parent_ran_fn+' as parent randoms from (real) data release')
     parent_ran = read_hdf5_blosc(parent_ran_fn, columns=rancols)
     in_table = read_hdf5_blosc(
         in_ran_fn, columns=['TARGETID', 'TARGETID_DATA', 'WEIGHT', 'NX'])
@@ -957,7 +976,7 @@ def addnbar(fb, nran=18, bs=0.01, zmin=0.01, zmax=1.6, P0=10000, add_data=True, 
     from desitarget.internal import sharedmem
     nzf = np.loadtxt(fb.replace(ran_sw, '')+'_nz.txt').transpose()
     bsold = bs
-    bs = nzf[2][0]-nzf[1][0]
+    bs = round(nzf[2][0]-nzf[1][0],5)
     printlog('nz bin size is actually '+str(bs), logger)
     nzd = nzf[3]  # column with nbar values
     fn = fb.replace(ran_sw, '')+'_clustering.dat'+exttp
@@ -1859,7 +1878,7 @@ def convert_fits2h5(filename):
     write_LSShdf5_scratchcp(ff, filename.replace('.fits', '.h5'))
 
 
-def write_LSShdf5_scratchcp(ff, outf, logger=None):
+def write_LSShdf5_scratchcp(ff, outf, logger=None, mode=0o660, group='desi'):
     import h5py
     import hdf5plugin  # need to be in the cosmodesi test environment, as of Sep 4th 25
 
@@ -1867,6 +1886,8 @@ def write_LSShdf5_scratchcp(ff, outf, logger=None):
     ff is the structured array/Table to be written out as an LSS catalog
     outf is the full path to write out
     comments is a list of comments to include in the header
+    mode is the chmod permissions to set on the output file, default is octal 660 for user and group read/write but no permissions for others
+    group is the group owner to set on the output file, default is 'desi' (for NERSC). if blank or None, the group ownership will not be changed
     this will write to a temporary file on scratch and then copy it, then delete the temporary file once verify a successful copy
     will return 'FAIL' or 'SUCCESS'
     '''
@@ -1878,7 +1899,7 @@ def write_LSShdf5_scratchcp(ff, outf, logger=None):
     rng = np.random.default_rng()  # seed=rann)
     ranstring = int(rng.random()*1e10)
     tmpfn = os.getenv('SCRATCH')+'/' + \
-        outf.split('/')[-1] + '.tmp'+str(ranstring)
+        os.path.basename(outf) + '.tmp'+str(ranstring)
     if os.path.isfile(tmpfn):
         # os.system('rm ' + tmpfn)
         os.remove(tmpfn)
@@ -1901,7 +1922,9 @@ def write_LSShdf5_scratchcp(ff, outf, logger=None):
     shutil.copy2(tmpfn, outftmp)
     os.rename(outftmp, outf)
     # os.system('chmod 775 ' + outf) #this should fix permissions for the group
-    os.chmod(outf, 0o775)
+    if group: # blank group will cause problems with chown
+        shutil.chown(outf, group=group) # essentially chgrp desi. good to ensure at NERSC, but may fail elsewhere, do we need to account for that?
+    os.chmod(outf, mode) # now that the file's group is desi, could set permissions to 660 for more security
     printlog('moved output to ' + outf, logger)
     df = 0
     # printlog('checking read of column ' + testcol, logger)
@@ -1945,11 +1968,13 @@ def read_hdf5_blosc(filename, columns=None, extname='LSS'):
     return data
 
 
-def write_LSS_scratchcp(ff, outf, comments=None, extname='LSS', logger=None):
+def write_LSS_scratchcp(ff, outf, comments=None, extname='LSS', logger=None, mode=0o660, group='desi'):
     '''
     ff is the structured array/Table to be written out as an LSS catalog
     outf is the full path to write out
     comments is a list of comments to include in the header
+    mode is the chmod permissions to set on the output file, default is octal 660 for user and group read/write but no permissions for others
+    group is the group owner to set on the output file, default is 'desi' (for NERSC). if blank or None, the group ownership will not be changed
     this will write to a temporary file on scratch and then copy it, then delete the temporary file once verify a successful copy
     '''
     import shutil
@@ -1957,7 +1982,7 @@ def write_LSS_scratchcp(ff, outf, comments=None, extname='LSS', logger=None):
     rng = np.random.default_rng()  # seed=rann)
     ranstring = int(rng.random()*1e10)
     tmpfn = os.getenv('SCRATCH')+'/' + \
-        outf.split('/')[-1] + '.tmp'+str(ranstring)
+        os.path.basename(outf) + '.tmp'+str(ranstring)
     if os.path.isfile(tmpfn):
         os.system('rm ' + tmpfn)
     fd = fitsio.FITS(tmpfn, "rw")
@@ -1983,7 +2008,9 @@ def write_LSS_scratchcp(ff, outf, comments=None, extname='LSS', logger=None):
     shutil.copy2(tmpfn, outftmp)
     os.rename(outftmp, outf)
     # os.system('chmod 775 ' + outf) #this should fix permissions for the group
-    os.chmod(outf, 0o775)
+    if group: # blank group will cause problems with chown
+        shutil.chown(outf, group=group) # essentially chgrp desi. good to ensure at NERSC, but may fail elsewhere, do we need to account for that?
+    os.chmod(outf, mode) # now that the file's group is desi, could set permissions to 660 for more security
 
     # os.system('cp ' + tmpfn + ' ' + outf)
     # os.system('chmod 775 ' + outf) #this should fix permissions for the group

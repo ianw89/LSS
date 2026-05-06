@@ -571,6 +571,11 @@ if args.tracer[:3] == 'BGS':
     pthresh = 2000
     zmin = 0.1
     zmax = 0.5
+    if args.survey == 'DA2':
+        subfrac = 0.98
+        if 'holi' in args.simName:
+            subfrac = 0.94
+
 #    if notqso == 'notqso':
 #        maxp = 3200
 
@@ -847,16 +852,34 @@ if args.add_nt_misspw == 'y':
 if 'BGS_ANY-' in args.tracer or 'BGS_BRIGHT-' in args.tracer:
     abmagcut = -float(args.tracer.split('-')[1])
     common.printlog('using ab mag cut '+str(abmagcut),logger)
-    ffull = dirout+'/'+args.tracer+notqso+'_full'+args.use_map_veto+'.dat.fits'
+    #ffull = dirout+'/'+args.tracer+notqso+'_full'+args.use_map_veto+'.dat.fits'
+    ffull = dirout+'/'+args.tracer+notqso+'_full'+args.use_map_veto+'.dat.h5'
     common.printlog("path "+ffull, logger)
     if os.path.isfile(ffull) == False:
 
         if 'BGS_ANY-' in args.tracer:
-            fin = fitsio.read(dirout+'/BGS_ANY_full'+args.use_map_veto+'.dat.fits')
+            fn = dirout+'/BGS_ANY_full'+args.use_map_veto+'.dat.h5'
+            if os.path.isfile(fn):
+                fin = common.read_hdf5_blosc(fn.replace('global','dvs_ro'))
+            else:
+                common.printlog(fn+' not found!')
+            #fin = fitsio.read(dirout+'/BGS_ANY_full'+args.use_map_veto+'.dat.fits')
         elif 'BGS_BRIGHT-' in args.tracer:
-            fin = fitsio.read(dirout+'/BGS_BRIGHT_full'+args.use_map_veto+'.dat.fits')
-            
+            #fin = fitsio.read(dirout+'/BGS_BRIGHT_full'+args.use_map_veto+'.dat.fits')
+            fn = dirout+'/BGS_BRIGHT_full'+args.use_map_veto+'.dat.h5'
+            if os.path.isfile(fn):
+                fin = common.read_hdf5_blosc(fn.replace('global','dvs_ro'))
+            else:
+                common.printlog(fn+' not found!')            
         common.printlog("cut method "+args.absmagmd, logger)
+        dcols = list(fin.dtype.names)
+        if 'R_MAG_ABS' not in dcols:
+            tarf = os.path.join(args.targDir, 'forFA%d.fits' % mocknum)
+            td = fitsio.read(tarf,columns=['TARGETID','R_MAG_ABS'])
+            flen = len(fin)
+            fin = join(fin,td,keys=['TARGETID'])
+            if len(fin) != flen:
+                common.printlog('the lengths after join to get R_MAG_ABS changed!!!')
         if args.absmagmd == 'simp':
             sel = fin['R_MAG_ABS'] < abmagcut
         elif args.absmagmd == 'redshiftdep' and abmagcut == -2:
@@ -878,7 +901,8 @@ if 'BGS_ANY-' in args.tracer or 'BGS_BRIGHT-' in args.tracer:
             mock_z_cut = fit3_new(fin['Z_not4clus'])
             sel = fin['R_MAG_ABS'] < mock_z_cut
 
-        common.write_LSS_scratchcp(fin[sel],ffull,logger=logger)
+        #common.write_LSS_scratchcp(fin[sel],ffull,logger=logger)
+        common.write_LSShdf5_scratchcp(fin[sel],ffull,logger=logger)
 
 
 
@@ -940,33 +964,31 @@ if args.mkclusran == 'y':
     #if len(nztl) == 0:
     #    nztl.append('')
     
-    tsnrcol = 'TSNR2_ELG'
-    if args.tracer[:3] == 'BGS':
-        fl = os.path.join(readdir, finaltracer) + '_'
-        cols_clustering = Table.read(fl.replace('global','dvs_ro')+'clustering.dat.fits').columns
-        if 'G_R_OBS' in cols_clustering:
-            rcols.append('G_R_OBS')
-        if 'G_R_REST' in cols_clustering:
-            rcols.append('G_R_REST')
-        if 'R_MAG_ABS' in cols_clustering:
-            rcols.append('R_MAG_ABS')
-
-        tsnrcol = 'TSNR2_BGS'
-        if args.ccut is not None:
-            for rn in range(rannum[0], rannum[1]):
-                if not os.path.isfile('%s%s_%d_full_HPmapcut.ran.fits'% (os.path.join(pathparent, args.tracer), str(args.ccut), rn)):
-                    os.system('cp %s_%d_full_HPmapcut.ran.fits %s%s_%d_full_HPmapcut.ran.fits' %(os.path.join(dirfinal, args.tracer), rn, os.path.join(pathparent, args.tracer), str(args.ccut), rn))
-                #print('cp %s_%d_full_HPmapcut.ran.fits %s%s_%d_full_HPmapcut.ran.fits' %(os.path.join(dirout, args.tracer), rn, os.path.join(dirout, args.tracer), str(args.ccut), rn))
-            os.system('cp %s_frac_tlobs.fits %s%s_frac_tlobs.fits' %(os.path.join(dirout, args.tracer), os.path.join(dirout, args.tracer), str(args.ccut)))
+#     tsnrcol = 'TSNR2_ELG'
+#     if args.tracer[:3] == 'BGS':
+#         fl = os.path.join(readdir, finaltracer) + '_'
+#         cols_clustering = Table.read(fl.replace('global','dvs_ro')+'clustering.dat.fits').columns
+#         if 'G_R_OBS' in cols_clustering:
+#             rcols.append('G_R_OBS')
+#         if 'G_R_REST' in cols_clustering:
+#             rcols.append('G_R_REST')
+#         if 'R_MAG_ABS' in cols_clustering:
+#             rcols.append('R_MAG_ABS')
+# 
+#         tsnrcol = 'TSNR2_BGS'
+#         if args.ccut is not None:
+#             for rn in range(rannum[0], rannum[1]):
+#                 if not os.path.isfile('%s%s_%d_full_HPmapcut.ran.fits'% (os.path.join(pathparent, args.tracer), str(args.ccut), rn)):
+#                     os.system('cp %s_%d_full_HPmapcut.ran.fits %s%s_%d_full_HPmapcut.ran.fits' %(os.path.join(dirfinal, args.tracer), rn, os.path.join(pathparent, args.tracer), str(args.ccut), rn))
+#                 #print('cp %s_%d_full_HPmapcut.ran.fits %s%s_%d_full_HPmapcut.ran.fits' %(os.path.join(dirout, args.tracer), rn, os.path.join(dirout, args.tracer), str(args.ccut), rn))
+#             os.system('cp %s_frac_tlobs.fits %s%s_frac_tlobs.fits' %(os.path.join(dirout, args.tracer), os.path.join(dirout, args.tracer), str(args.ccut)))
     
     fl = os.path.join(readdir, finaltracer) + '_'
-    common.printlog('adding tlobs to randoms with '+ fl,logger)
+    
     #clus_arrays = [fitsio.read(fl.replace('global','dvs_ro')+'clustering.dat.fits')]
     clus_arrays = [common.read_hdf5_blosc(fl.replace('global','dvs_ro')+'clustering.dat.h5')]
     common.printlog('read in data catalogs',logger)
     ranin = os.path.join(readdir, finaltracer) + '_'
-    tlf = fitsio.read(fl+'frac_tlobs.fits')
-    common.printlog('read in frac_tlobs file',logger)
     #mockobs = fitsio.read(os.path.join(outdir, 'datcomb_' + pdir + 'assignwdup.fits'),columns=['TILEID','LOCATION','PRIORITY'])
     mockobs = common.read_hdf5_blosc(os.path.join(outdir, 'datcomb_' + pdir + 'assignwdup.h5'),columns=['TILEID','LOCATION','PRIORITY'])
     mockobs_tlid = 10000*mockobs['TILEID'] +mockobs['LOCATION']
@@ -977,15 +999,23 @@ if args.mkclusran == 'y':
         ranin = os.path.join(readdir, 'BGS_BRIGHT') + '_'
     if 'BGS_ANY' in args.tracer:
         ranin = os.path.join(readdir, 'BGS_ANY') + '_'
+    ran_finaltracer = finaltracer
+    if 'BGS_BRIGHT-' in args.tracer:
+        ran_finaltracer = ran_finaltracer.replace(args.tracer,'BGS_BRIGHT')
+        common.printlog('changed ran base to '+ran_finaltracer,logger)
+    common.printlog('adding tlobs to randoms with '+ fl.replace(finaltracer,ran_finaltracer)+'frac_tlobs.fits',logger)
+    tlf = fitsio.read(fl.replace(finaltracer,ran_finaltracer)+'frac_tlobs.fits')
+    common.printlog('read in frac_tlobs file',logger)
 
     global _parfun4
     def _parfun4(rann):
         #ct.add_tlobs_ran(fl, rann, hpmapcut = args.use_map_veto)
 #        print(os.path.join(readdir, finaltracer) + '_', os.path.join(dirout, finaltracer) + '_', rann, rcols, -1, tsnrcol, args.use_map_veto,  clus_arrays, 'y')
-        common.printlog('about to read input random for '+str(rann),logger)        
-        ranf = data_dir.replace('global','dvs_ro')+'/'+ finaltracer+'_'+str(rann)+'_dupran_masked_HPmapcut.h5' #first look for .h5 files
+        common.printlog('about to read input random for '+str(rann),logger) 
+        #files should be in the data directory; BGS with any absolute magnitude cut should read the file without that       
+        ranf = data_dir.replace('global','dvs_ro')+'/'+ ran_finaltracer+'_'+str(rann)+'_dupran_masked_HPmapcut.h5' #first look for .h5 files
         if not os.path.isfile(ranf):
-            ranf = data_dir.replace('global','dvs_ro')+'/'+finaltracer+'_'+str(rann)+'_dupran_masked_HPmapcut.fits'
+            ranf = data_dir.replace('global','dvs_ro')+'/'+ran_finaltracer+'_'+str(rann)+'_dupran_masked_HPmapcut.fits'
             datain = fitsio.read(ranf,columns = ['RA','DEC','TARGETID','TILEID','NTILE','PHOTSYS','TILES','LOCATION'])        
         else:
             datain = common.read_hdf5_blosc(ranf)
@@ -1187,7 +1217,9 @@ if args.doimlin == 'y' or args.prep4sysnet == 'y' or args.addsysnet=='y':
     else:
         redshift_ranges = zrl
     common.printlog('the redshift bins that will be fit are '+str(redshift_ranges),logger)
-    fit_maps = mainp.fit_maps_allebv
+    fit_maps = mainp.fit_maps
+    if tracer_clus == 'LRG':
+        fit_maps = mainp.fit_maps_allebv
     use_maps = fit_maps
     debv = common.get_debv()
     zcmb = common.mk_zcmbmap()
@@ -1234,6 +1266,8 @@ if args.doimlin == 'y' or args.prep4sysnet == 'y' or args.addsysnet=='y':
 
     data_catalogs = vstack([data_sgc, data_ngc])#np.concatenate([data_sgc, data_ngc])
     #common.printlog(str(np.unique(data_catalogs['PHOTSYS'],return_counts=True)),logger)
+
+if args.doimlin == 'y' or args.prep4sysnet == 'y':
 
     #randoms_catalogs = np.concatenate(
     randoms_catalogs = vstack(

@@ -1115,15 +1115,22 @@ def get_tiletab(tile_row,tarcol=['RA','DEC','TARGETID','DESI_TARGET','BGS_TARGET
     
     tile = tile_row['TILEID'][0]
     ts = str(tile).zfill(6)
+    #print(ts)
     faf = '/global/cfs/cdirs/desi/target/fiberassign/tiles/trunk/'+ts[:3]+'/fiberassign-'+ts+'.fits.gz'
     fht = fitsio.read_header(faf)
-    mdir = '/global/cfs/cdirs/desi'+fht['MTL'][8:]+'/'
+    mdir = '/dvs_ro/cfs/cdirs/desi'+fht['MTL'][8:]+'/'
     if mdir == '/global/cfs/cdirs/desi/survey/ops/staging/mtl/main/dark/':
         mdir = '/global/cfs/cdirs/desi/target/catalogs/mtl/1.0.0/mtl/main/dark/'
     if mdir == '/global/cfs/cdirs/desi/survey/ops/staging/mtl/main/bright/':
         mdir = '/global/cfs/cdirs/desi/target/catalogs/mtl/1.0.0/mtl/main/bright/'
     #wt = tiles['TILEID'] == tile
+    #print('reading targets for tile '+ts+' from '+mdir)
     tars = read_targets_in_tiles(mdir,tile_row,mtl=True,isodate=fht['MTLTIME'])
+    if 'MTL2' in fht.keys():
+        mdir = '/dvs_ro/cfs/cdirs/desi'+fht['MTL2'][8:]+'/'
+        #print('reading targets for tile '+ts+' from '+mdir)
+        tars2 = read_targets_in_tiles(mdir,tile_row,mtl=True,isodate=fht['MTLTIME'])
+        tars = np.concatenate([tars,tars2])
     #tars.keep_columns(tarcols)
     tars = tars[[b for b in tarcol]]
 
@@ -3149,11 +3156,15 @@ def mkfulldat(zf,imbits,ftar,tp,bit,outf,ftiles,maxp=3400,azf='',azfm='cumul',em
         pd = 'bright'
         tscol = 'TSNR2_BGS'
         #CHANGE TO HANDLE MOCK PATHS PROPERLY
-        collf = '/global/cfs/cdirs/desi/survey/catalogs/'+survey+'/LSS/collisions-BRIGHT.fits'
+        collf = '/dvs_ro/cfs/cdirs/desi/survey/catalogs/'+survey+'/LSS/collisions-BRIGHT.fits'
+    elif tp[:3] == 'LGE':
+        pd = 'dark1b'
+        tscol = 'TSNR2_ELG'
+        collf = '/dvs_ro/cfs/cdirs/desi/survey/catalogs/'+survey+'/LSS/collisions-DARK1B.fits'
     else:
         pd = 'dark'
         tscol = 'TSNR2_ELG'
-        collf = '/global/cfs/cdirs/desi/survey/catalogs/'+survey+'/LSS/collisions-DARK.fits'
+        collf = '/dvs_ro/cfs/cdirs/desi/survey/catalogs/'+survey+'/LSS/collisions-DARK.fits'
 
     
     if mockz and mask_coll:
@@ -3994,7 +4005,7 @@ def mkclusdat(fl,weighttileloc=True,zmask=False,correct_zcmb='n',tp='',dchi2=9,r
         #    wz &= ff['TSNR2_ELG'] > tsnrcut
         #    common.printlog('length after tsnrcut '+str(len(ff[wz])),logger)
 
-    if tp[:3] == 'LRG':
+    if tp[:3] == 'LRG' or tp[:3] == 'LGE':
         print('applying extra cut for LRGs')
         # Custom DELTACHI2 vs z cut from Rongpu
         wz = ff['ZWARN'] == 0
