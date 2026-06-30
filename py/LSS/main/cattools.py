@@ -4031,7 +4031,7 @@ def mkclusdat(fl,weighttileloc=True,zmask=False,correct_zcmb='n',tp='',dchi2=9,r
         wz &= ff['ZWARN'] != 999999
 
         if dchi2 is not None:
-            print('applying extra cut for BGS')
+            common.printlog('applying extra cut for BGS', logger)
             wz &= ff['DELTACHI2'] > dchi2
             common.printlog('length after dchi2 cut '+str(len(ff[wz])),logger)
         #wz &= ff['TSNR2_BGS'] > tsnrcut
@@ -4120,7 +4120,7 @@ def mkclusdat(fl,weighttileloc=True,zmask=False,correct_zcmb='n',tp='',dchi2=9,r
 
         ff['WEIGHT'] *= ff['WEIGHT_COMP']
     else:
-        print('using PROB_OBS for WEIGHT_COMP')
+        common.printlog('using PROB_OBS for WEIGHT_COMP', logger)
         ff['WEIGHT_COMP'] = 129/(1+128*ff['PROB_OBS'])
         ff['WEIGHT'] *= ff['WEIGHT_COMP']
 #    if 'WEIGHT_SYS' not in cols:
@@ -4129,9 +4129,9 @@ def mkclusdat(fl,weighttileloc=True,zmask=False,correct_zcmb='n',tp='',dchi2=9,r
     if 'WEIGHT_SYS' not in cols:
         ff['WEIGHT_SYS'] =  np.ones(len(ff)) #need to initialize these at 1
     sel = ff['WEIGHT_SYS']*0 != 0
-    print(str(len(ff[sel]))+ ' with nan weight_sys being give a value of 1')
+    common.printlog(str(len(ff[sel]))+ ' with nan weight_sys being give a value of 1', logger)
     ff['WEIGHT_SYS'][sel] = 1
-    print('weightsys bounds',min(ff['WEIGHT_SYS']),max(ff['WEIGHT_SYS']))
+    common.printlog('weightsys bounds '+str(min(ff['WEIGHT_SYS']))+' '+str(max(ff['WEIGHT_SYS'])), logger)
     ff['WEIGHT'] *= ff['WEIGHT_SYS']
 
     #weights for imaging systematic go here
@@ -4166,15 +4166,15 @@ def mkclusdat(fl,weighttileloc=True,zmask=False,correct_zcmb='n',tp='',dchi2=9,r
 
     #apply cut on ntile
     if ntilecut > 0:
-        print('length before ntile cut '+str(len(ff)))
+        common.printlog('length before ntile cut '+str(len(ff)), logger)
         wt = ff['NTILE'] > ntilecut
         ff = ff[wt]
-        print('length after ntile cut '+str(len(ff)))
+        common.printlog('length after ntile cut '+str(len(ff)), logger)
     if ccut == 'zQSO':
         wc = ff['SPECTYPE'] ==  'QSO'
-        print('length before cutting to spectype QSO '+str(len(ff)))
+        common.printlog('length before cutting to spectype QSO '+str(len(ff)), logger)
         ff = ff[wc]
-        print('length after cutting to spectype QSO '+str(len(ff)))
+        common.printlog('length after cutting to spectype QSO '+str(len(ff)), logger)
 
     #select down to specific columns below and then also split N/S
     
@@ -4213,7 +4213,7 @@ def mkclusdat(fl,weighttileloc=True,zmask=False,correct_zcmb='n',tp='',dchi2=9,r
             ff = common.add_dered_flux(ff,fcols)
             for col in fcols:
                 kl.append('flux_'+col.lower()+'_dered')
-            print(kl)
+            common.printlog(str(kl), logger)
             if kemd == 'phot':
                 restcols = ['REST_GMR_0P1','REST_GMR_0P0','ABSMAG_RP0','ABSMAG_RP1']
                 for col in restcols:
@@ -4230,8 +4230,8 @@ def mkclusdat(fl,weighttileloc=True,zmask=False,correct_zcmb='n',tp='',dchi2=9,r
                 r_dered = 22.5 - 2.5*np.log10(ff['flux_r_dered'])
                 abr = r_dered -dm
             sel = abr < float(ccut)
-            print('comparison before/after abs mag cut')
-            print(len(ff),len(ff[sel]))
+            common.printlog('comparison before/after abs mag cut', logger)
+            common.printlog(f'{len(ff)} {len(ff[sel])}', logger)
             ff = ff[sel]
         if 'G_R_OBS' in cols:
             kl.append('G_R_OBS')
@@ -4249,10 +4249,10 @@ def mkclusdat(fl,weighttileloc=True,zmask=False,correct_zcmb='n',tp='',dchi2=9,r
         if name in data_cols:
             kll.append(name)
         else:
-            print(name+' not found in input and will not be in clustering catalog')
+            common.printlog(name+' not found in input and will not be in clustering catalog', logger)
     ff.keep_columns(kll)
-    print('minimum,maximum weight')
-    print(np.min(ff['WEIGHT']),np.max(ff['WEIGHT']))
+    common.printlog('minimum,maximum weight', logger)
+    common.printlog(f'{np.min(ff["WEIGHT"])} {np.max(ff["WEIGHT"])}', logger)
 
     #comments = ["DA02 'clustering' LSS catalog for data, all regions","entries are only for data with good redshifts"]
     #common.write_LSS(ff,outf,comments)
