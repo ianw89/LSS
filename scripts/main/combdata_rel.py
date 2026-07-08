@@ -1,4 +1,5 @@
 # standard python
+#works for daily and DA3 onward
 import logging
 import sys
 import os
@@ -50,6 +51,10 @@ parser.add_argument(
     "--dotarspec", help="whether or not to combine spec and tar data per type, for non-daily data", action='store_true')
 parser.add_argument(
     "--dospec", help="whether or not to combine spec data from beginning", action='store_true')
+parser.add_argument(
+    "--dozmtl", help="whether or not to make the zmtl file", action='store_true')
+parser.add_argument(
+    "--redo_zmtljoin", help="whether or not to make rejoin to the zmtl file", action='store_true')
 
 parser.add_argument(
     "--redospec", help="whether or not to combine spec data from beginning", action='store_true')
@@ -111,8 +116,8 @@ if specrel != 'daily':
     specrell = specrel.split('-')
     coaddir = '/global/cfs/cdirs/desi/spectro/redux/' + \
         specrell[0]+'/tiles/cumulative/'
-    specf = Table.read('/global/cfs/cdirs/desi/spectro/redux/' +
-                       specrell[0]+'/zcatalog/'+specrell[1]+'/ztile-main-'+prog+'-cumulative.fits')
+    specf = Table.read('/dvs_ro/cfs/cdirs/desi/spectro/redux/' +
+                       specrell[0]+'/zcatalog/'+specrell[1]+'/main/ztile-main-'+prog+'-cumulative.fits')
     wd &= np.isin(mt['TILEID'], np.unique(specf['TILEID']))
 else:
     coaddir = '/global/cfs/cdirs/desi/spectro/redux/daily/tiles/archive/'
@@ -264,7 +269,7 @@ if args.mkemlin:
                 print('completed '+str(ndone)+' tiles')
         ct.combtile_em(tiles4comb, outf)
     elif specrel != 'daily':
-        if args.par == 'y':
+        if args.par:
             tl = []
             if os.path.isfile(outf):
                 specd = fitsio.read(outf)
@@ -333,7 +338,7 @@ if args.mkemlin:
         else:
             ct.combtile_em_alt(tiles4comb, outf, prog='dark', coaddir=coaddir)
     else:
-        if args.par == 'y':
+        if args.par:
             tl = []
             if os.path.isfile(outf):
                 specd = fitsio.read(outf)
@@ -485,21 +490,59 @@ if args.dotarspec and specrel == 'daily':
 
 
 if specrel != 'daily' and args.dospec:
-    specf.keep_columns(['TARGETID', 'CHI2', 'COEFF', 'Z', 'ZERR', 'ZWARN', 'NPIXELS', 'SPECTYPE', 'SUBTYPE', 'NCOEFF', 'DELTACHI2', 'LOCATION', 'FIBER', 'COADD_FIBERSTATUS', 'TILEID', 'FIBERASSIGN_X', 'FIBERASSIGN_Y', 'COADD_NUMEXP', 'COADD_EXPTIME', 'COADD_NUMNIGHT', 'MEAN_DELTA_X', 'MEAN_DELTA_Y', 'RMS_DELTA_X', 'RMS_DELTA_Y', 'MEAN_PSF_TO_FIBER_SPECFLUX', 'TSNR2_ELG_B', 'TSNR2_LYA_B', 'TSNR2_BGS_B', 'TSNR2_QSO_B', 'TSNR2_LRG_B',
-                        'TSNR2_ELG_R', 'TSNR2_LYA_R', 'TSNR2_BGS_R', 'TSNR2_QSO_R', 'TSNR2_LRG_R', 'TSNR2_ELG_Z', 'TSNR2_LYA_Z', 'TSNR2_BGS_Z',
-                        'TSNR2_QSO_Z', 'TSNR2_LRG_Z', 'TSNR2_ELG', 'TSNR2_LYA', 'TSNR2_BGS', 'TSNR2_QSO', 'TSNR2_LRG', 'PRIORITY', 'DESI_TARGET', 'BGS_TARGET', 'TARGET_RA', 'TARGET_DEC', 'LASTNIGHT'])
-    specfo = ldirspec+'datcomb_'+prog+'_zmtl_zdone.fits'
+    
     outfs = ldirspec+'datcomb_'+prog+'_spec_zdone.fits'
-    if args.redo_zmtl == 'y':
+    kc = ['TARGETID', 'CHI2', 'COEFF', 'Z', 'ZERR', 'ZWARN', 'NPIXELS', 'SPECTYPE', 'SUBTYPE', 'NCOEFF', 'DELTACHI2', 'LOCATION', 'FIBER', 'COADD_FIBERSTATUS', 'TILEID', 'FIBERASSIGN_X', 'FIBERASSIGN_Y', 'COADD_NUMEXP', 'COADD_EXPTIME', 'COADD_NUMNIGHT', 'MEAN_DELTA_X', 'MEAN_DELTA_Y', 'RMS_DELTA_X', 'RMS_DELTA_Y', 'MEAN_PSF_TO_FIBER_SPECFLUX', 'TSNR2_ELG_B', 'TSNR2_LYA_B', 'TSNR2_BGS_B', 'TSNR2_QSO_B', 'TSNR2_LRG_B',
+                            'TSNR2_ELG_R', 'TSNR2_LYA_R', 'TSNR2_BGS_R', 'TSNR2_QSO_R', 'TSNR2_LRG_R', 'TSNR2_ELG_Z', 'TSNR2_LYA_Z', 'TSNR2_BGS_Z',
+                            'TSNR2_QSO_Z', 'TSNR2_LRG_Z', 'TSNR2_ELG', 'TSNR2_LYA', 'TSNR2_BGS', 'TSNR2_QSO', 'TSNR2_LRG', 'PRIORITY', 'DESI_TARGET', 'BGS_TARGET', 'TARGET_RA', 'TARGET_DEC', 'LASTNIGHT']
+
+    logger.info('length of specf is '+str(len(specf)))
+    if args.dozmtl:
+        if specrell[1] == 'v2':
+            ml = ['OII_FLUX', 'OII_FLUX_IVAR','CHI2', 'COEFF', 'Z', 'ZERR', 'ZWARN', 'NPIXELS', 'SPECTYPE', 'SUBTYPE', 'NCOEFF', 'DELTACHI2', 'LOCATION', 'MEAN_DELTA_X', 'MEAN_DELTA_Y', 'RMS_DELTA_X', 'RMS_DELTA_Y', 'MEAN_PSF_TO_FIBER_SPECFLUX', 'TSNR2_ELG_B', 'TSNR2_LYA_B', 'TSNR2_BGS_B', 'TSNR2_QSO_B', 'TSNR2_LRG_B', 'TSNR2_ELG_R', 'TSNR2_LYA_R', 'TSNR2_BGS_R', 'TSNR2_QSO_R', 'TSNR2_LRG_R', 'TSNR2_ELG_Z', 'TSNR2_LYA_Z', 'TSNR2_BGS_Z', 'TSNR2_QSO_Z', 'TSNR2_LRG_Z', 'TSNR2_ELG', 'TSNR2_LYA', 'TSNR2_BGS', 'TSNR2_QSO', 'TSNR2_LRG']
+            logger.info('reading extra file')
+            specfe = fitsio.read('/dvs_ro/cfs/cdirs/desi/spectro/redux/' +
+                           specrell[0]+'/zcatalog/'+specrell[1]+'/main/ztile-main-'+prog+'-cumulative-extra.fits',columns=['TARGETID','TILEID','LOCATION']+ml)
+            logger.info('joining base spec file')
+            specf = join(specf,specfe,keys=['TARGETID','TILEID','LOCATION'])
+            kc += ['OII_FLUX', 'OII_FLUX_IVAR']
+            del specfe
+        specf.keep_columns(kc)
+
+        specfo = ldirspec+'datcomb_'+prog+'_zmtl_zdone.fits'
         ct.combtile_spec(tiles4comb, specfo, md='zmtl', specver=specrell[0])
         fzmtl = fitsio.read(specfo)
         specf = join(specf, fzmtl, keys=['TARGETID', 'TILEID'])
         specf.write(outfs, format='fits', overwrite=True)
-
+    elif args.redo_zmtljoin:
+        if specrell[1] == 'v2':
+            ml = ['OII_FLUX', 'OII_FLUX_IVAR','CHI2', 'COEFF', 'Z', 'ZERR', 'ZWARN', 'NPIXELS', 'SPECTYPE', 'SUBTYPE', 'NCOEFF', 'DELTACHI2', 'LOCATION', 'MEAN_DELTA_X', 'MEAN_DELTA_Y', 'RMS_DELTA_X', 'RMS_DELTA_Y', 'MEAN_PSF_TO_FIBER_SPECFLUX', 'TSNR2_ELG_B', 'TSNR2_LYA_B', 'TSNR2_BGS_B', 'TSNR2_QSO_B', 'TSNR2_LRG_B', 'TSNR2_ELG_R', 'TSNR2_LYA_R', 'TSNR2_BGS_R', 'TSNR2_QSO_R', 'TSNR2_LRG_R', 'TSNR2_ELG_Z', 'TSNR2_LYA_Z', 'TSNR2_BGS_Z', 'TSNR2_QSO_Z', 'TSNR2_LRG_Z', 'TSNR2_ELG', 'TSNR2_LYA', 'TSNR2_BGS', 'TSNR2_QSO', 'TSNR2_LRG']
+            logger.info('reading extra file')
+            specfe = fitsio.read('/dvs_ro/cfs/cdirs/desi/spectro/redux/' +
+                           specrell[0]+'/zcatalog/'+specrell[1]+'/main/ztile-main-'+prog+'-cumulative-extra.fits',columns=['TARGETID','TILEID']+ml)
+            logger.info('joining base spec file')
+            if np.array_equal(specf['TARGETID'],specfe['TARGETID']):
+                for col in ml:
+                    logger.info('adding column '+col)
+                    specf[col] = specfe[col]
+            else:
+                logger.info('doing astropy join because TARGETID are not row matched')
+                specf = join(specf,specfe,keys=['TARGETID','TILEID'])
+            kc += ['OII_FLUX', 'OII_FLUX_IVAR']
+            del specfe
+        specf.keep_columns(kc)
+        specfo = ldirspec+'datcomb_'+prog+'_zmtl_zdone.fits'
+        fzmtl = fitsio.read(specfo)
+        logger.info('joing to zmtl file')
+        specf = join(specf, fzmtl, keys=['TARGETID', 'TILEID'])
+        specf.write(outfs, format='fits', overwrite=True)    
+    else:
     # if os.path.isfile(outfs):
-    specf = Table(fitsio.read(outfs.replace('global', 'dvs_ro')))
+        logger.info('about to read '+outfs)
+        specf = Table(fitsio.read(outfs.replace('global', 'dvs_ro')))
     # else:
     # remove these columns because they are in the targets already
+    logger.info('length of specf after join to zmtl info is '+str(len(specf)))
     specf.remove_columns(['DESI_TARGET', 'BGS_TARGET',
                          'TARGET_RA', 'TARGET_DEC', 'PRIORITY'])
     if specrel == 'everest' or specrel == 'guadalupe':
@@ -508,20 +551,23 @@ if specrel != 'daily' and args.dospec:
         notqsos = ['']
     else:
         # tar
+        notqso = ''
         if prog == 'dark':
+            
             if args.tracer == 'all':
-                tps = ['LRG', 'ELG', 'QSO', 'ELG_LOP', 'ELG_LOP']
-                notqsos = ['', '', '', '', 'notqso']
+                tps = ['LRG', 'ELG', 'QSO']#, 'ELG_LOP', 'ELG_LOP']
+                #notqsos = ['', '', '', '', 'notqso']
             else:
                 tps = [args.tracer.strip('notqso')]
-                notqsos = ['']
-                if 'notqso' in args.tracer:
-                    notqsos = ['notqso']
+                #notqsos = ['']
+                #if 'notqso' in args.tracer:
+                #    notqsos = ['notqso']
         if prog == 'bright':
-            tps = ['BGS_ANY', 'BGS_BRIGHT']  # ,'MWS_ANY']
-            notqsos = ['', '']
+            tps = ['BGS_ANY']#, 'BGS_BRIGHT']  # ,'MWS_ANY']
+            #notqsos = ['', '']
     if args.dotarspec:
-        for tp, notqso in zip(tps, notqsos):
+        #for tp, notqso in zip(tps, notqsos):
+        for tp in tps:
             # first test to see if we need to update any
             logger.info('now doing '+tp+notqso)
             # logger.info(str(len(tiles4comb['TILEID'])))
@@ -556,9 +602,6 @@ if specrel != 'daily' and args.dospec:
                     logger.info('column '+col +
                                 ' was not in stacked tarwdup table')
 
-            # tarf.remove_columns(['ZWARN_MTL'])
-            tarf['TILELOCID'] = 10000*tarf['TILEID'] + tarf['LOCATION']
-            # specf.remove_columns(['PRIORITY'])
             tj = join(tarf, specf, keys=[
                       'TARGETID', 'LOCATION', 'TILEID'], join_type='left')
             del tarf

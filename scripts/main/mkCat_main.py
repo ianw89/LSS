@@ -132,6 +132,8 @@ parser.add_argument("--imsys_colname",help="column name for fiducial imaging sys
 parser.add_argument("--add_weight_zfail",help="add weights for redshift systematics to full file?",default='n')
 parser.add_argument("--add_bitweight",help="add info from the alt mtl",default='n')
 parser.add_argument("--compmd",help="use altmtl to use PROB_OBS",default='not_altmtl')
+parser.add_argument("--redo_fracz",help="whether to recalculate the completeness weights based on masked data",default='n')
+parser.add_argument("--nearestneighbor",help="whether to nearest neighbor weights on data instead of frac_tl_obs on randoms",default='n')
 parser.add_argument("--addNtileweight2full",help="whether to add the NTILE weight to the full catalogs (necessary for consistent angular upweighting)",default='n')
 parser.add_argument("--NStoGC",help="convert to NGC/SGC catalogs",default='n')
 parser.add_argument("--splitGC",help="convert to NGC/SGC catalogs",default='n')
@@ -398,6 +400,7 @@ if mkfulld:
     maskcoll = False
     if args.survey != 'main':
         maskcoll = True
+    common.printlog('the emline file is '+emlin_fn)
     ct.mkfulldat(dz,imbits,ftar,type,bit,dirout+type+notqso+'_full_noveto.dat.fits',tlf,emlin_fn=emlin_fn,survey=args.survey,maxp=maxp,azf=azf,azfm=azfm,desitarg=desitarg,specver=specrel,notqso=notqso,min_tsnr2=tsnrcut,badfib=mainp.badfib_td,badfib_status=mainp.badfib_status,mask_coll=maskcoll,logger=logger)
 
 
@@ -434,14 +437,14 @@ if args.fillran == 'y':
 
 
 if args.apply_veto == 'y':
-    print('applying vetos')
+    common.printlog('applying vetos',logger)
     logf.write('applied vetos to data catalogs for '+tp+' '+str(datetime.now()))
 
     if args.ranonly != 'y':
         fin = dirout.replace('global','dvs_ro')+type+notqso+'_full_noveto.dat.fits'
         fout = dirout+type+notqso+'_full.dat.fits'
         common.apply_veto(fin,fout,ebits=ebits,zmask=False,maxp=maxp,reccircmasks=mainp.reccircmasks,logger=logger)
-    print('data veto done, now doing randoms')
+    common.printlog('data veto done, now doing randoms',logger)
     def _parfun(rn):
         #fin = dirout.replace('global','dvs_ro')+type+notqso+'_'+str(rn)+'_full_noveto.ran.fits'
         fin = dirout.replace('global','dvs_ro')+progl+'_'+str(rn)+'_full_noveto.ran.fits'
@@ -1308,15 +1311,25 @@ if args.ran_utlid == 'y':
 
 
 #needs to happen before randoms so randoms can get z and weights
-weightileloc=True
-if args.compmd == 'altmtl':
-    weightileloc = False
-if mkclusdat:
-    ct.mkclusdat(dirout+type+notqso,weightileloc,tp=type,dchi2=dchi2,zmin=mainp.zmin,zmax=mainp.zmax,correct_zcmb=args.zcmb,wsyscol=args.imsys_colname,use_map_veto=args.use_map_veto,extradir=args.extra_clus_dir)#,ntilecut=ntile,ccut=ccut)
-
 nzcompmd = 'ran'
 if args.compmd == 'altmtl':
     nzcompmd = args.compmd
+
+weightileloc=True
+redo_fracz=False
+if args.redo_fracz == 'y':
+    redo_fracz=True
+    common.printlog('recalculating FRACZ_TILELOCID weight from masked data',logger)
+NN = False
+if args.nearestneighbor == 'y':
+    NN = True
+    nzcompmd = 'dat'
+    common.printlog('adding nearest neighbor to completeness weight',logger)
+if args.compmd == 'altmtl':
+    weightileloc = False
+if mkclusdat:
+    ct.mkclusdat(dirout+type+notqso,redo_fracz=redo_fracz,NN=NN,weighttileloc=weightileloc,tp=type,dchi2=dchi2,zmin=mainp.zmin,zmax=mainp.zmax,correct_zcmb=args.zcmb,wsyscol=args.imsys_colname,use_map_veto=args.use_map_veto,extradir=args.extra_clus_dir)#,ntilecut=ntile,ccut=ccut)
+
 
 
 inds = np.arange(rm,rx)

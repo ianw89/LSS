@@ -3151,6 +3151,10 @@ def mkfulldat(zf,imbits,ftar,tp,bit,outf,ftiles,maxp=3400,azf='',azfm='cumul',em
     -----
     """
 
+    if emlin_fn is None:
+        logger.info('will not be adding emline info, because emlin_fn is None')
+    else:
+        logger.info('will be adding emline info from '+emlin_fn)
 
     if tp[:3] == 'BGS' or tp[:3] == 'MWS':
         pd = 'bright'
@@ -3223,6 +3227,8 @@ def mkfulldat(zf,imbits,ftar,tp,bit,outf,ftiles,maxp=3400,azf='',azfm='cumul',em
             common.printlog('reading '+assignf+'.fits',logger)
             fs = fitsio.read(assignf.replace('global', 'dvs_ro'))
             fs = Table(fs)
+        else:
+            common.printlog(fs +' not found!',logger)
         fs['TILELOCID'] = 10000*fs['TILEID'] +fs['LOCATION']
     else:
         specf = specdir+'datcomb_'+prog+'_spec_zdone.fits'
@@ -3414,9 +3420,10 @@ def mkfulldat(zf,imbits,ftar,tp,bit,outf,ftiles,maxp=3400,azf='',azfm='cumul',em
 
 
     if tp[:3] == 'ELG' and azf != '' and azfm == 'cumul':# or tp == 'ELG_HIP':
-        arz = Table(fitsio.read(azf,columns=['TARGETID','LOCATION','TILEID','OII_FLUX','OII_FLUX_IVAR']))
-        arz['TILEID'] = arz['TILEID'].astype(int)
-        dz = join(dz,arz,keys=['TARGETID','LOCATION','TILEID'],join_type='left')#,uniq_col_name='{col_name}{table_name}',table_names=['', '_OII'])
+        if azf is not None and 'OII_FLUX' not in list(dz.dtype.names):
+            arz = Table(fitsio.read(azf,columns=['TARGETID','LOCATION','TILEID','OII_FLUX','OII_FLUX_IVAR']))
+            arz['TILEID'] = arz['TILEID'].astype(int)
+            dz = join(dz,arz,keys=['TARGETID','LOCATION','TILEID'],join_type='left')#,uniq_col_name='{col_name}{table_name}',table_names=['', '_OII'])
         o2c = np.log10(dz['OII_FLUX'] * np.sqrt(dz['OII_FLUX_IVAR']))+0.2*np.log10(dz['DELTACHI2'])
         w = (o2c*0) != 0
         w |= dz['OII_FLUX'] < 0
@@ -3428,6 +3435,9 @@ def mkfulldat(zf,imbits,ftar,tp,bit,outf,ftiles,maxp=3400,azf='',azfm='cumul',em
             print('check length after merge with OII strength file:' +str(len(dz)))
 
     if tp[:3] == 'QSO' and azf != '' and azfm == 'cumul':
+        logger.info('adding extra redshift info to QSO with '+azf)
+        if emlin_fn is None:
+            logger.info('will not be adding emline info, because emlin_fn is None')
         arz = Table(fitsio.read(azf))
         arz.keep_columns(['TARGETID','LOCATION','TILEID','Z','Z_QN'])
         arz['TILEID'] = arz['TILEID'].astype(int)
@@ -3436,11 +3446,19 @@ def mkfulldat(zf,imbits,ftar,tp,bit,outf,ftiles,maxp=3400,azf='',azfm='cumul',em
         dz['Z'].name = 'Z_RR' #rename the original redrock redshifts
         dz['Z_QF'].name = 'Z' #the redshifts from the quasar file should be used instead
         if emlin_fn is not None:
-            emcat =  Table(fitsio.read(emlin_fn,columns=['TARGETID','LOCATION','TILEID','OII_FLUX','OII_FLUX_IVAR','OIII_FLUX','OIII_FLUX_IVAR']))
-            emcat['TILEID'] = emcat['TILEID'].astype(int)
-            dz = join(dz,emcat,keys=['TARGETID','LOCATION','TILEID'],join_type='left')
+            logger.info('adding info from '+emlin_fn)
+            cols = ['TARGETID','LOCATION','TILEID']
+            cols_needed = ['OII_FLUX','OII_FLUX_IVAR','OIII_FLUX','OIII_FLUX_IVAR']
+            for col in cols_needed:
+                if col not in list(dz.dtype.names):
+                    cols.append(col)
+            logger.info('columns to use for match are '+str(cols))
+            if len(cols) > 3:
+                emcat =  Table(fitsio.read(emlin_fn,columns=cols))
+                emcat['TILEID'] = emcat['TILEID'].astype(int)
+                dz = join(dz,emcat,keys=['TARGETID','LOCATION','TILEID'],join_type='left')
 
-    if tp[:3] == 'ELG' and azf != '':
+    if tp[:3] == 'ELG' and azf != '' and azf is not None:
         if logger is not None:
             logger.info('number of masked oII row (hopefully matches number not assigned) '+ str(np.sum(dz['o2c'].mask)))
         else:
@@ -3639,6 +3657,7 @@ def add_zfail_weight2fullQSO(indir,version,qsocat,tsnrcut=80,readpars=False,logg
     selobs = ff['ZWARN'] != 999999
     selobs &= ff['TSNR2_ELG'] > tsnrcut
     ff = ff[selobs]
+    ff = common.cut_specdat(ff)
     azf = qsocat
     arz = Table(fitsio.read(azf))
     arz.keep_columns(['TARGETID','LOCATION','TILEID','Z','Z_QN'])
@@ -3648,7 +3667,18 @@ def add_zfail_weight2fullQSO(indir,version,qsocat,tsnrcut=80,readpars=False,logg
     ff['Z'].name = 'Z_RR' #rename the original redrock redshifts
     ff['Z_QF'].name = 'Z_not4clus' #the redshifts from the quasar file should be used instead
     ff = common.addNS(ff)
-    ff = common.cut_specdat(ff)
+    needed_cols = ['OII_FLUX','OII_FLUX_IVAR','OIII_FLUX','OIII_FLUX_IVAR']
+    em_cols = ['TARGETID','LOCATION','TILEID']
+    for col in needed_cols:
+    	if col not in list(ff.dtype.names):
+    	    em_cols.append(col)
+    if len(em_cols) > 3:
+        common.printlog('adding info from emline file',logger)
+        em_fn = indir + 'emlin_catalog.fits'
+        emlin = fitsio.read(em_fn,columns=em_cols)
+            
+        ff = join(ff,emlin,keys=['TARGETID','TILEID','LOCATION'])
+        del emlin
     outdir = indir+'LSScats/'+version+'/'
     tp = 'QSO'
     ffv = Table.read(outdir+tp+'_full_noveto.dat.fits')
@@ -3933,7 +3963,7 @@ def add_zfail_weight2full(indir,tp='',tsnrcut=80,readpars=False,hpmapcut='_HPmap
 
 
 
-def mkclusdat(fl,weighttileloc=True,zmask=False,correct_zcmb='n',tp='',dchi2=9,rcut=None,ntilecut=0,ccut=None,ebits=None,zmin=0,zmax=6,write_cat='y',splitNS='n',return_cat='n',compmd='ran',kemd='',wsyscol=None,use_map_veto='',subfrac=1,zsplit=None, ismock=False,logger=None,extradir='', extracols=None,exttp='.fits'):
+def mkclusdat(fl,redo_fracz=False,NN=False,weighttileloc=True,zmask=False,correct_zcmb='n',tp='',dchi2=9,rcut=None,ntilecut=0,ccut=None,ebits=None,zmin=0,zmax=6,write_cat='y',splitNS='n',return_cat='n',compmd='ran',kemd='',wsyscol=None,use_map_veto='',subfrac=1,zsplit=None, ismock=False,logger=None,extradir='', extracols=None,exttp='.fits'):
     import LSS.common_tools as common
     from LSS import ssr_tools
     '''
@@ -3968,7 +3998,11 @@ def mkclusdat(fl,weighttileloc=True,zmask=False,correct_zcmb='n',tp='',dchi2=9,r
     elif os.path.isfile(in_fn+'.fits'):
         common.printlog('reading '+in_fn+'.fits',logger)
         ff = Table.read(in_fn.replace('global', 'dvs_ro')+'.fits')
-
+    else:
+        common.printlog('did not find file associated with '+in_fn)
+    if redo_fracz:
+        ff['NEW_WEIGHTFRACZ'] = common.get_fracz_pNNweight(ff, get_nnweight=NN,logger=logger)
+        
     #ff = Table.read(fl+'_full'+use_map_veto+'.dat.fits'.replace('global','dvs_ro'))
     if wsyscol is not None:
         ff['WEIGHT_SYS'] = np.copy(ff[wsyscol])
@@ -4114,8 +4148,11 @@ def mkclusdat(fl,weighttileloc=True,zmask=False,correct_zcmb='n',tp='',dchi2=9,r
     #    ff['WEIGHT_ZFAIL'] = 1./ff['relSSR_tile']
     
     if weighttileloc == True:
-        ff['WEIGHT_COMP'] = 1./ff['FRACZ_TILELOCID']
-        if 'FRAC_TLOBS_TILES' in cols and compmd == 'dat':
+        if  redo_fracz:
+            ff['WEIGHT_COMP'] = ff['NEW_WEIGHTFRACZ']
+        else:
+            ff['WEIGHT_COMP'] = 1./ff['FRACZ_TILELOCID']
+        if 'FRAC_TLOBS_TILES' in cols and compmd == 'dat' and NN == False:
             ff['WEIGHT_COMP'] *= 1/ff['FRAC_TLOBS_TILES']
 
         ff['WEIGHT'] *= ff['WEIGHT_COMP']
