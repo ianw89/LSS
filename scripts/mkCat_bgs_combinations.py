@@ -213,7 +213,7 @@ for i in range(len(mag_bins)-1):
         dat_inbothbins = dat_inmagbin[gr_mask]
 
         # When calling xirunpc, a zmin and zmax is also provided. Should that cut just happen there since it's N vs S specific?
-        zmin = 0.001 # TODO should I increase to 0.01 maybe?
+        zmin = 0.005 # this is what the reference measurement I made is doing for zmin. In my first test I did 0.001
         zmax = get_max_observable_z(mag_bins[i+1], 19.5) # TODO I did 19.54 in the first test of this FYI
         dz = zmax - zmin
         common.printlog(f'  zmin = {zmin}, zmax = {zmax}', logger)

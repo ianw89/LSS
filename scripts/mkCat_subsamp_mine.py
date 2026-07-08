@@ -22,6 +22,7 @@ from LSS.globals import main
 
 
 parser = argparse.ArgumentParser()
+parser.add_argument("--centrals",help="True/False", default='n')
 parser.add_argument("--extracut",help="Q (quiescent) or SF (star-forming) or ALL", default='ALL')
 parser.add_argument("--passcut",help="a value of NTILE_MINE to cut to", default=0, type=int)
 parser.add_argument("--ccut",help="a string that is used define your subsample", default='') 
@@ -195,6 +196,24 @@ if args.mkfulldat == 'y':
 
     common.printlog('reading full data file '+dirin+args.input_tracer+'_full'+args.use_map_veto+'.dat.fits',logger)
     fulldat = fitsio.read(dirin+args.input_tracer+'_full'+args.use_map_veto+'.dat.fits')
+
+    # Use group catalog to get centrals (if desired) and quality cuts
+    # Including these quality cuts is a key benefit of using my script
+    path = '/global/cfs/cdirs/desi/users/ianw89/groupcatalogs/BGS_Y3/v0.8/GROUP_CATALOG_BGS_Y3_1PASS_v0.8.fits'
+    grpcat = Table(fitsio.read(path, columns=['TARGETID', 'Z_ASSIGNED_FLAG', 'ABS_MAG_R', 'G_R', 'IS_SAT']))
+    common.printlog(f'{len(grpcat)} group catalog rows read from {path}', logger)
+
+    grpcat_sel = grpcat['Z_ASSIGNED_FLAG'] == 0 # DESI spectroscopic data only
+    if args.centrals == 'y':
+        grpcat_sel &= ~grpcat['IS_SAT'] # Centrals only
+    grpcat = grpcat[grpcat_sel]
+    grpcat.remove_columns(['Z_ASSIGNED_FLAG', 'IS_SAT'])
+    common.printlog(f'{len(grpcat)} group catalog rows after cuts (DESI spec + centrals only)', logger)
+
+    # Merge with fulldat, inner join
+    fulldat = join(fulldat, grpcat, keys=['TARGETID'], join_type="inner")
+    common.printlog(f'{len(fulldat)} full data rows after joining with group catalog', logger)
+
     
     sel = np.ones(len(fulldat),dtype=bool) #initialize selection to all true
     
