@@ -3963,7 +3963,7 @@ def add_zfail_weight2full(indir,tp='',tsnrcut=80,readpars=False,hpmapcut='_HPmap
 
 
 
-def mkclusdat(fl,redo_fracz=False,NN=False,weighttileloc=True,zmask=False,correct_zcmb='n',tp='',dchi2=9,rcut=None,ntilecut=0,ccut=None,ebits=None,zmin=0,zmax=6,write_cat='y',splitNS='n',return_cat='n',compmd='ran',kemd='',wsyscol=None,use_map_veto='',subfrac=1,zsplit=None, ismock=False,logger=None,extradir='', extracols=None,exttp='.fits'):
+def mkclusdat(fl,redo_fracz=False,NN=False,weighttileloc=True,zmask=False,correct_zcmb='n',tp='',dchi2=9,rcut=None,ntilecut=0,ccut=None,ebits=None,zmin=0,zmax=6,write_cat='y',splitNS='n',return_cat='n',compmd='ran',kemd='',wsyscol=None,use_map_veto='',subfrac=1,zsplit=None, ismock=False,logger=None,extradir='', extracols=None,exttp='.fits', data=None):
     import LSS.common_tools as common
     from LSS import ssr_tools
     '''
@@ -3991,15 +3991,19 @@ def mkclusdat(fl,redo_fracz=False,NN=False,weighttileloc=True,zmask=False,correc
         wzm += 'ntileg'+str(ntilecut)+'_'
     outf = (fl+wzm+'clustering.dat.fits').replace(tp,extradir+tp)
     
-    in_fn = fl+'_full'+use_map_veto+'.dat'
-    if os.path.isfile(in_fn+'.h5'):
-        common.printlog('reading '+in_fn+'.h5',logger)
-        ff = common.read_hdf5_blosc(in_fn.replace('global', 'dvs_ro')+'.h5')
-    elif os.path.isfile(in_fn+'.fits'):
-        common.printlog('reading '+in_fn+'.fits',logger)
-        ff = Table.read(in_fn.replace('global', 'dvs_ro')+'.fits')
+    if data is not None:
+        ff = data
     else:
-        common.printlog('did not find file associated with '+in_fn)
+        in_fn = fl+'_full'+use_map_veto+'.dat'
+        if os.path.isfile(in_fn+'.h5'):
+            common.printlog('reading '+in_fn+'.h5',logger)
+            ff = common.read_hdf5_blosc(in_fn.replace('global', 'dvs_ro')+'.h5')
+        elif os.path.isfile(in_fn+'.fits'):
+            common.printlog('reading '+in_fn+'.fits',logger)
+            ff = Table.read(in_fn.replace('global', 'dvs_ro')+'.fits')
+        else:
+            common.printlog('did not find file associated with '+in_fn)
+
     if redo_fracz:
         ff['NEW_WEIGHTFRACZ'] = common.get_fracz_pNNweight(ff, get_nnweight=NN,logger=logger)
         
@@ -4093,6 +4097,8 @@ def mkclusdat(fl,redo_fracz=False,NN=False,weighttileloc=True,zmask=False,correc
         wz &= keep
 
     ff = ff[wz]
+    if zmax is not None and isinstance(zmax, np.ndarray):
+        zmax = zmax[wz]
     common.printlog('length after cutting to good z '+str(len(ff)),logger)
     ff['WEIGHT'] = np.ones(len(ff))#ff['WEIGHT_ZFAIL']
     if 'WEIGHT_ZFAIL' not in cols:
@@ -4215,7 +4221,7 @@ def mkclusdat(fl,redo_fracz=False,NN=False,weighttileloc=True,zmask=False,correc
 
     #select down to specific columns below and then also split N/S
     
-    common.printlog('cutting to z range '+str(zmin)+' '+str(zmax),logger)
+    common.printlog('cutting to z range '+str(zmin)+' '+str(np.unique(zmax)),logger)
     selz = ff['Z'] > zmin
     selz &= ff['Z'] < zmax
     ff = ff[selz]

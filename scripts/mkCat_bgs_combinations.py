@@ -23,6 +23,7 @@ from LSS.globals import main
 parser = argparse.ArgumentParser()
 parser.add_argument("--zmin",help="a redshift cut to apply when making clustering catalogs, default is to apply what is in globals.py", default=None, type=float)
 parser.add_argument("--zmax",help="a redshift cut to apply when making clustering catalogs, default is to apply what is in globals.py", default=None, type=float)
+parser.add_argument("--overwrite",help="whether to overwrite existing files", choices=['n', 'y'], default='n')
 
 #arguments to find input data
 parser.add_argument("--basedir", help="base directory for input, a versioning structure is expected under it", default='/global/cfs/cdirs/desi/survey/catalogs/')
@@ -61,7 +62,7 @@ from astropy import units as u
 _cosmo_h = FlatLambdaCDM(H0=100, Om0=0.315192, Ob0=0.045, Tcmb0=2.725, Neff=3.04) 
 def get_max_observable_z(abs_mags, fluxlimit): # this should use un-kcorrected absolute magnitudes in H=100 cosmology
     d_l = (10 ** ((fluxlimit - abs_mags + 5) / 5)) / 1e6 # luminosity distance in Mpc
-    return z_at_value(_cosmo_h.luminosity_distance, d_l*u.Mpc) # TODO what cosmology to use?
+    return z_at_value(_cosmo_h.luminosity_distance, d_l*u.Mpc) # Use this cosmology because it needs to match the absolute magnitude calculation cosmology (fastspecfit)
 
 #function to take a file and split it NGC/SGC
 def splitGC(flroot,datran='.dat',rann=0):
@@ -69,11 +70,16 @@ def splitGC(flroot,datran='.dat',rann=0):
     if datran == '.ran':
         app = str(rann)+'_clustering'+datran+'.fits'
 
+    outf_ngc = flroot+'NGC_'+app
+    outf_sgc = flroot+'SGC_'+app
+    
+    # If they both already exist we we aren't ovewriting, return early
+    if os.path.exists(outf_ngc) and os.path.exists(outf_sgc) and args.overwrite != 'y':
+        return
+
     fn = Table(fitsio.read(flroot +app))
     sel_ngc = common.splitGC(fn)#gc.b > 0
-    outf_ngc = flroot+'NGC_'+app
     common.write_LSS_scratchcp(fn[sel_ngc],outf_ngc,logger=logger)
-    outf_sgc = flroot+'SGC_'+app
     common.write_LSS_scratchcp(fn[~sel_ngc],outf_sgc,logger=logger)
 
 
@@ -213,17 +219,21 @@ for i in range(len(mag_bins)-1):
         dat_inbothbins = dat_inmagbin[gr_mask]
 
         # When calling xirunpc, a zmin and zmax is also provided. Should that cut just happen there since it's N vs S specific?
-        zmin = 0.005 # this is what the reference measurement I made is doing for zmin. In my first test I did 0.001
-        zmax = get_max_observable_z(mag_bins[i+1], 19.5) # TODO I did 19.54 in the first test of this FYI
-        dz = zmax - zmin
-        common.printlog(f'  zmin = {zmin}, zmax = {zmax}', logger)
+        zmin = 0.001 # Reference measurement uses 0.005 but there is no need to match. For my faintest bin it only goes up to 0.005 zmax
+        zmax_S = float(get_max_observable_z(mag_bins[i+1], 19.5).round(4))
+        zmax_N = float(get_max_observable_z(mag_bins[i+1], 19.54).round(4))
+        zmax = min(zmax_N, zmax_S)
+        zmax_arr = np.where(dat_inbothbins['PHOTSYS'] == b'N', zmax_N, zmax_S)
+
+        dz = zmax - zmin # TODO simplification for n(z) calculation...
+        common.printlog(f'  zmin = {zmin}, zmax_S = {zmax_S}, zmax_N = {zmax_N}', logger)
 
         #write output to new "full" catalog at your defined location
         tracer_out = args.input_tracer + "_CEN" + f'_mag{mag_bins[i]:.4f}to{mag_bins[i+1]:.4f}_gr{gr_bins[j]:.4f}to{gr_bins[j+1]:.4f}'
         fout = args.outdir+'/'+tracer_out+'_full'+args.use_map_veto+'.dat.fits'
 
         if args.mkfulldat == 'y':
-            if os.path.exists(fout):
+            if os.path.exists(fout) and args.overwrite == 'n':
                 common.printlog(f'Output file {fout} already exists, skipping', logger)
             else:
                 common.write_LSS_scratchcp(dat_inbothbins, fout, logger=logger)
@@ -234,11 +244,11 @@ for i in range(len(mag_bins)-1):
         if args.compmd == 'altmtl':
             weightileloc = False
         if mkclusdat:
-            if os.path.exists(args.outdir+'/'+tracer_out+'_clustering.dat.fits'):
+            if os.path.exists(args.outdir+'/'+tracer_out+'_clustering.dat.fits') and args.overwrite == 'n':
                 common.printlog(f'clustering catalog {args.outdir}/{tracer_out}_clustering.dat.fits already exists, skipping', logger)
             else:
-                # this reads in, maybe don't do that to save I/O
-                ct.mkclusdat(args.outdir+'/'+tracer_out, weightileloc, tp=tracer_out, dchi2=dchi2, zmin=zmin, zmax=zmax, use_map_veto=args.use_map_veto)
+                # Pass in data so it doesn't bother re-reading what we just wrote
+                ct.mkclusdat(args.outdir+'/'+tracer_out, weightileloc, tp=tracer_out, dchi2=dchi2, zmin=zmin, zmax=zmax_arr, use_map_veto=args.use_map_veto, data=dat_inbothbins)
 
         nzcompmd = 'ran'
         if args.compmd == 'altmtl':
@@ -254,7 +264,7 @@ for i in range(len(mag_bins)-1):
             def _parfun_cr(ii):
                 ranin = rand_tbls[ii]
                 ranout = args.outdir+'/'+tracer_out+'_'+str(ii)+'_clustering.ran.fits'
-                if os.path.exists(ranout):
+                if os.path.exists(ranout) and args.overwrite == 'n':
                     common.printlog(f'ranout {ranout} already exists, skipping', logger)
                     return
                 ct.mkclusran(ranin,args.outdir+'/'+tracer_out+'_',ii,rcols=rcols,clus_arrays=clus_arrays,use_map_veto=args.use_map_veto,compmd=nzcompmd,logger=logger,tp=args.input_tracer)
@@ -312,6 +322,11 @@ for i in range(len(mag_bins)-1):
                 fcr = fb+'_0_clustering.ran.fits'
                 fcd = fb+'_clustering.dat.fits'
                 fout = fb+'_nz.txt'
+
+                # If fout already exists and we aren't overwriting, skip making n(z)
+                if os.path.exists(fout) and args.overwrite != 'y':
+                    continue
+
                 #make n(z)
                 common.mknz(fcd,fcr,fout,bs=dz,zmin=zmin,zmax=zmax,compmd=nzcompmd)
                 #do steps 2-5 above
@@ -328,10 +343,24 @@ for i in range(len(mag_bins)-1):
 
         # determine linear weights for imaging systematics
         # this is new for doing after the fact based on clustering catalogs
+        skip_imsys = False
         if args.imsys_clus == 'y':
+            zmin_imaging = 0.001
+            zmax_imaging = 1.0
+
+            figname1 = dirout+'/'+tracer_out+'_N_'+str(zmin_imaging)+str(zmax_imaging)+'_linclusimsysfit.png'
+            figname2 = dirout+'/'+tracer_out+'_S_'+str(zmin_imaging)+str(zmax_imaging)+'_linclusimsysfit.png'
+
+            if os.path.exists(figname1) and os.path.exists(figname2) and args.overwrite != 'y':
+                common.printlog('Imaging systematic weight figures already exist and not overwriting; will skip.', logger)
+                skip_imsys = True
+
+            if skip_imsys:
+                continue
+
+            common.printlog('Calculating imaging systematic weights' ,logger)
             #import package
             from LSS.imaging import densvar 
-            zrl = [(0.001,0.5)]
 
             #get maps to regress against
             if args.usemaps == None:
@@ -348,10 +377,10 @@ for i in range(len(mag_bins)-1):
 
             #get randoms
             ranl = []
-            for i in range(0,args.nran4imsys):
-                ran = fitsio.read(os.path.join(dirout, tracer_out+'_NGC_'+str(i)+'_clustering.ran.fits')) 
+            for iran in range(0,args.nran4imsys):
+                ran = fitsio.read(os.path.join(dirout, tracer_out+'_NGC_'+str(iran)+'_clustering.ran.fits')) 
                 ranl.append(ran)
-                ran = fitsio.read(os.path.join(dirout, tracer_out+'_SGC_'+str(i)+'_clustering.ran.fits')) 
+                ran = fitsio.read(os.path.join(dirout, tracer_out+'_SGC_'+str(iran)+'_clustering.ran.fits')) 
                 ranl.append(ran)
             rands = np.concatenate(ranl)
             
@@ -388,30 +417,27 @@ for i in range(len(mag_bins)-1):
                 
                 selr = rands['PHOTSYS'] == reg
 
-                for zr in zrl:
-                    zmin = zr[0]
-                    zmax = zr[1]
-                    
-                    common.printlog('getting weights for region '+reg+' and '+str(zmin)+'<z<'+str(zmax),logger)
-                    if args.input_tracer == 'LRG' and args.usemaps == None:
-                        if reg == 'N':
-                            fitmapsbin = fit_maps
-                        else:
-                            if zmax == 0.6:
-                                fitmapsbin = mainp.fit_maps46s
-                            if zmax == 0.8:
-                                fitmapsbin = mainp.fit_maps68s
-                            if zmax == 1.1:
-                                fitmapsbin = mainp.fit_maps81s
-                    else:
+                common.printlog('Getting weights for region '+reg+' and '+str(zmin_imaging)+'<z<'+str(zmax_imaging), logger)
+                if args.input_tracer == 'LRG' and args.usemaps == None:
+                    if reg == 'N':
                         fitmapsbin = fit_maps
-                    use_maps = fitmapsbin
-                    #now, everything in place to actually perform regression for this reg and zbin
-                    wsysl = densvar.get_imweight(dat,rands,zmin,zmax,reg,fitmapsbin,use_maps,sys_tab=sys_tab,zcol='Z',modoutname = dirout+'/'+tracer_out+'_'+reg+'_'+str(zmin)+str(zmax)+'_linfitparam.txt',figname=dirout+'/'+tracer_out+'_'+reg+'_'+str(zmin)+str(zmax)+'_linclusimsysfit.png',wtmd='clus')
-                    #we want to update the weights for the selection of data just input to the regression
-                    sel = wsysl != 1 
-                    common.printlog(f'sel sum {np.sum(sel)} out of len {len(wsysl)}',logger)
-                    dat[syscol][sel] = wsysl[sel]
+                    else:
+                        if zmax == 0.6:
+                            fitmapsbin = mainp.fit_maps46s
+                        if zmax == 0.8:
+                            fitmapsbin = mainp.fit_maps68s
+                        if zmax == 1.1:
+                            fitmapsbin = mainp.fit_maps81s
+                else:
+                    fitmapsbin = fit_maps
+                use_maps = fitmapsbin
+                #now, everything in place to actually perform regression for this reg and zbin
+                figname = dirout+'/'+tracer_out+'_'+reg+'_'+str(zmin_imaging)+str(zmax_imaging)+'_linclusimsysfit.png'
+                wsysl = densvar.get_imweight(dat,rands,zmin_imaging,zmax_imaging,reg,fitmapsbin,use_maps,sys_tab=sys_tab,zcol='Z',modoutname = dirout+'/'+tracer_out+'_'+reg+'_'+str(zmin_imaging)+str(zmax_imaging)+'_linfitparam.txt',figname=figname,wtmd='clus', logger=logger)
+                #we want to update the weights for the selection of data just input to the regression
+                sel = wsysl != 1 
+                common.printlog(f'sel sum {np.sum(sel)} out of len {len(wsysl)}',logger)
+                dat[syscol][sel] = wsysl[sel]
             #attach data to NGC/SGC catalogs, write those out
             #we will do a join
             dat.keep_columns(['TARGETID',syscol])
@@ -439,7 +465,7 @@ for i in range(len(mag_bins)-1):
             common.write_LSS_scratchcp(dat_sgc,os.path.join(dirout, tracer_out+'_SGC_clustering.dat.fits'),logger=logger)
 
         #column needs to be added to randoms
-        if args.imsys_clus_ran == 'y':
+        if args.imsys_clus_ran == 'y' and not skip_imsys:
             #do randoms
             syscol = 'WEIGHT_IMLIN_CLUS'
             fname = os.path.join(dirout, tracer_out+'_NGC_clustering.dat.fits')

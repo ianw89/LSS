@@ -189,6 +189,8 @@ if args.extracut != 'ALL':
     tracer_out += f'_{args.extracut}'
 if args.passcut > 0:
     tracer_out += f'_{args.passcut}p'
+if args.centrals == 'y':
+    tracer_out += '_CEN'
 
 #tracer_out = args.input_tracer
 
@@ -285,7 +287,7 @@ if args.mkfulldat == 'y':
         common.printlog(f'length after min {pcut_col} selection {np.sum(sel)}', logger)
         sel &= fulldat[pcut_col] < max_val
         common.printlog(f'length after max {pcut_col} selection {np.sum(sel)}', logger)
-        
+
     #write output to new "full" catalog at your defined location
     fout = args.outdir+'/'+tracer_out+'_full'+args.use_map_veto+'.dat.fits'
     common.write_LSS_scratchcp(fulldat[sel],fout,logger=logger)
