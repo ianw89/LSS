@@ -88,7 +88,7 @@ def compute_angular_weights(nthreads=8, gpu=False, dtype='f8', tracer='ELG', tra
     return wang
 
 
-def compute_correlation_function(corr_type, edges, distance, nthreads=8, gpu=False, dtype='f8', wang=None, split_randoms_above=30., weight_type='default', tracer='ELG', tracer2=None, recon_dir=None, rec_type=None, njack=120, nradjack=1, option=None, mpicomm=None, mpiroot=None, cat_read=None, dat_cat=None, ran_cat=None, rpcut=None, thetacut=None,nreal=129, **kwargs):
+def compute_correlation_function(corr_type, edges, distance, nthreads=8, gpu=False, dtype='f8', wang=None, split_randoms_above=30., weight_type='default', tracer='ELG', tracer2=None, recon_dir=None, rec_type=None, njack=120, nradjack=1, option=None, mpicomm=None, mpiroot=None, cat_read=None, dat_cat=None, ran_cat=None, rpcut=None, thetacut=None,nreal=129, downsample=None, **kwargs):
 
     wsum_data = None
     wsum_randoms = None
@@ -110,6 +110,23 @@ def compute_correlation_function(corr_type, edges, distance, nthreads=8, gpu=Fal
     if mpicomm is None or mpicomm.rank == mpiroot:
 
         data, randoms = io.read_clustering_positions_weights(distance, name=['data', 'randoms'], recon_dir=recon_dir,rec_type=rec_type, tracer=tracer, option=option, cat_read=cat_read, dat_cat=dat_cat, ran_cat=ran_cat, **catalog_kwargs)
+
+        if downsample is not None:
+            downsample_factor = 1.0 / downsample
+
+            def _apply_mask(arr, mask):
+                if isinstance(arr, (list, tuple)):
+                    return [a[mask] for a in arr]
+                return arr[mask]
+
+            new_data_pos, new_data_wts = [], []
+            for pos, wt in zip(data[0], data[1]):
+                mask = np.random.rand(len(pos[0])) < downsample_factor
+                new_data_pos.append([p[mask] for p in pos])
+                new_data_wts.append(_apply_mask(wt, mask))
+            data = (new_data_pos, new_data_wts)
+            
+            logger.info(f'Applied downsampling by a factor of {downsample_factor} to data.')
 
         if (with_shifted) & (cat_read == None):
             shifted = randoms  # above returned shifted randoms
@@ -334,7 +351,7 @@ def get_edges(corr_type='smu', bin_type='lin'):
     raise ValueError('corr_type must be one of ["smu", "rppi", "theta"]')
 
 
-def corr_fn(file_type='npy', region='', tracer='ELG', tracer2=None, zmin=0, zmax=np.inf, recon_dir='n',rec_type=False, weight_type='default', bin_type='lin', njack=0, nradjack=0, nrandoms=8, split_randoms_above=10, out_dir='.', option=None, wang=None, rpcut=None, thetacut=None):
+def corr_fn(file_type='npy', region='', tracer='ELG', tracer2=None, zmin=0, zmax=np.inf, recon_dir='n',rec_type=False, weight_type='default', bin_type='lin', njack=0, nradjack=0, nrandoms=8, split_randoms_above=10, out_dir='.', option=None, wang=None, rpcut=None, thetacut=None, downsample=None):
     if tracer2: tracer += '_' + tracer2
     if rec_type: tracer += '_' + rec_type
     if region: tracer += '_' + region
@@ -350,6 +367,8 @@ def corr_fn(file_type='npy', region='', tracer='ELG', tracer2=None, zmin=0, zmax
         root += '_rpcut{}'.format(rpcut)
     if thetacut is not None:
         root += '_thetacut{}'.format(thetacut)
+    if downsample is not None:
+        root += '_downsample{:.1f}'.format(downsample)
     if file_type == 'npy':
         return os.path.join(out_dir, 'allcounts_{}.npy'.format(root))
     if file_type == 'ndens':
@@ -369,6 +388,7 @@ if __name__ == '__main__':
     parser.add_argument('--region', help='regions; by default, run on N, S; pass NS to run on concatenated N + S', type=str, nargs='*', choices=['N', 'S', 'NS','NGC','SGC','NGCS','DES','SGCnotDES','ALL'], default=None)
     parser.add_argument('--zlim', help='z-limits, or options for z-limits, e.g. "highz", "lowz", "fullonly"', type=str, nargs='*', default=None)
     parser.add_argument('--maglim', help='absolute r-band magnitude limits', type=str, nargs='*', default=None)
+    parser.add_argument("--downsample",help="factor by which to randomly downsample by", default=None, type=float)
     parser.add_argument('--option', help='place to put extra options for cutting catalogs', default=None)
     parser.add_argument('--corr_type', help='correlation type', type=str, nargs='*', choices=['smu', 'rppi', 'theta'], default=['smu'])
     parser.add_argument('--weight_type', help='types of weights to use; use "default_angular_bitwise" for PIP with angular upweighting; "default" just uses WEIGHT column', type=str, default='default')
@@ -532,7 +552,7 @@ if __name__ == '__main__':
         logger.info('Computing correlation functions {} in regions {} in redshift ranges {}.'.format(args.corr_type, regions, zlims))
 
     for zmin, zmax in zlims:
-        base_file_kwargs = dict(tracer=tracer, tracer2=tracer2, zmin=zmin, zmax=zmax, recon_dir=args.recon_dir,rec_type=args.rec_type, weight_type=args.weight_type, bin_type=bintype_str, njack=args.njack, nradjack=args.nradjack, nrandoms=args.nran, split_randoms_above=args.split_ran_above, option=option, rpcut=args.rpcut, thetacut=args.thetacut)
+        base_file_kwargs = dict(tracer=tracer, tracer2=tracer2, zmin=zmin, zmax=zmax, recon_dir=args.recon_dir,rec_type=args.rec_type, weight_type=args.weight_type, bin_type=bintype_str, njack=args.njack, nradjack=args.nradjack, nrandoms=args.nran, split_randoms_above=args.split_ran_above, option=option, rpcut=args.rpcut, thetacut=args.thetacut, downsample=args.downsample)
         for region in regions:
             if args.use_arrays == 'y':
                 if region == "N":
@@ -546,7 +566,7 @@ if __name__ == '__main__':
                     logger.info('Computing correlation function {} in region {} in redshift range {}.'.format(corr_type, region, (zmin, zmax)))
                 edges = get_edges(corr_type=corr_type, bin_type=args.bin_type)
             
-                result, wang, wsum_data, wsum_randoms = compute_correlation_function(corr_type, edges=edges, distance=distance, nrandoms=args.nran, split_randoms_above=args.split_ran_above, nthreads=nthreads, gpu=gpu, region=region, zlim=(zmin, zmax), maglim=maglims, weight_type=args.weight_type, njack=args.njack, nradjack=args.nradjack, wang=wang, mpicomm=mpicomm, mpiroot=mpiroot, option=option, rpcut=args.rpcut, thetacut=args.thetacut,nreal=args.nreal, **catalog_kwargs)
+                result, wang, wsum_data, wsum_randoms = compute_correlation_function(corr_type, edges=edges, distance=distance, nrandoms=args.nran, split_randoms_above=args.split_ran_above, nthreads=nthreads, gpu=gpu, region=region, zlim=(zmin, zmax), maglim=maglims, weight_type=args.weight_type, njack=args.njack, nradjack=args.nradjack, wang=wang, mpicomm=mpicomm, mpiroot=mpiroot, option=option, rpcut=args.rpcut, thetacut=args.thetacut,nreal=args.nreal, downsample=args.downsample, **catalog_kwargs)
                 # Save pair counts
                 if mpicomm is None or mpicomm.rank == mpiroot:
                     result.save(corr_fn(file_type='npy', region=region, out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs))
