@@ -770,6 +770,8 @@ def mknz(fcd, fcr, fout, bs=0.01, zmin=0.01, zmax=1.6, randens=2500., compmd='ra
         df = read_hdf5_blosc(fcd)
 
     nbin = int((zmax-zmin)*(1+bs/10)/bs)
+    if nbin < 5:
+        nbin = 5 # minimum number of z bins, for narrow z range samples
     if wtmd == 'clus':
         # this is what should be used for clustering catalogs because 'WEIGHT' gets renormalized
         wts = df['WEIGHT_COMP']*df['WEIGHT_SYS']*df['WEIGHT_ZFAIL']
