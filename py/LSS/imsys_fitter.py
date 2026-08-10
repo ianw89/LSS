@@ -9,6 +9,7 @@ from astropy.table import Table
 from iminuit import Minuit
 #import iminuit.frontends
 from scipy.optimize import minimize
+import LSS.common_tools as common
 
 class Syst:
 
@@ -230,7 +231,7 @@ class Syst:
             chi2+= np.sum( (self.delta[name]-1)**2/self.edelta[name]**2)
         return chi2
 
-    def fit_minuit(self, fit_maps=None, fixes=None, limits=None, priors=None):
+    def fit_minuit(self, fit_maps=None, fixes=None, limits=None, priors=None, logger=None):
 
         #-- If fit_maps is None, fit all maps 
         #-- Otherwise, define indices of maps to be fitted
@@ -241,7 +242,7 @@ class Syst:
             maps = self.syst_names
             for fit_map in fit_maps:
                 if fit_map not in maps:
-                    print(fit_map, 'not available for fitting')
+                    common.printlog(fit_map+' not available for fitting', logger)
                     fit_maps.remove(fit_map)
             #fit_index = []
             #fit_maps_ordered = []
@@ -269,7 +270,7 @@ class Syst:
         par_names = [par for par in init_pars]
         #print(par_names)
         pars_values = [ init_pars[par] for par in init_pars]
-        print(tuple(pars_values))
+        #print(tuple(pars_values))
         mig = Minuit(self.get_chi2, tuple(pars_values), name=tuple(par_names))
         mig.errordef = Minuit.LEAST_SQUARES
 # 
@@ -296,10 +297,8 @@ class Syst:
         self.par_names = par_names
         
 
-        print('Maps available for chi2:')
-        print(self.syst_names)
-        print('Fitting for:')
-        print(self.par_names)
+        #print('Maps available for chi2:', self.syst_names)
+        common.printlog('Fitting for: '+str(self.par_names), logger)
 
         #mig = Minuit(self.get_chi2,  \
 #         mig = Minuit(self.get_chi2, throw_nan=False, \
@@ -326,10 +325,10 @@ class Syst:
         self.rchi2min = self.chi2min/(self.ndata-self.npars)
         self.chi2_before = self.get_chi2()
         self.rchi2_before =  self.get_chi2()/self.ndata
-        print('chi2 (before fit) = %.2f   ndata = %d                rchi2 = %.4f'%\
-                (self.chi2_before, self.ndata, self.rchi2_before))
-        print('chi2 (after  fit) = %.2f   ndata = %d   npars = %d   rchi2 = %.4f'%\
-                (self.chi2min, self.ndata, self.npars, self.rchi2min))
+        common.printlog('chi2 (before fit) = %.2f   ndata = %d                rchi2 = %.4f'%\
+                (self.chi2_before, self.ndata, self.rchi2_before), logger)
+        common.printlog('chi2 (after  fit) = %.2f   ndata = %d   npars = %d   rchi2 = %.4f'%\
+                (self.chi2min, self.ndata, self.npars, self.rchi2min), logger)
 
     def plot_overdensity(self, pars=[None], ylim=[0.75, 1.25], 
         nbinsh=50, title=None):

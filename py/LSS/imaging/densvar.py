@@ -409,11 +409,11 @@ def get_imweight(dd,rd,zmin,zmax,reg,fit_maps,use_maps,plotr=True,zcol='Z',sys_t
     s.prepare(nbins=nbins)
     #for name in fit_maps:
     #    print(name,len(s.data_syst[name]),len(s.data_we))
-    s.fit_minuit(fit_maps=fit_maps)
-    common.printlog(str(s.best_pars),logger)
-    common.printlog(str(list(s.best_pars)),logger)
+    s.fit_minuit(fit_maps=fit_maps, logger=logger)
+    #common.printlog(str(s.best_pars),logger)
+    #common.printlog(str(list(s.best_pars)),logger)
     pars_dict = {}
-    common.printlog('writing to '+modoutname,logger)
+    common.printlog('Writing imaging fit parameters to '+modoutname, logger)
     fo = open(modoutname,'w')
     for par_name, p in zip(s.par_names, list(s.best_pars)):
         pars_dict[par_name] = p
@@ -421,7 +421,7 @@ def get_imweight(dd,rd,zmin,zmax,reg,fit_maps,use_maps,plotr=True,zcol='Z',sys_t
     fo.close()
     if plotr:
         #s.plot_overdensity(pars=[None, s.best_pars], ylim=[0.7, 1.3])#, title=f'{sample_name}: global fit')
-        common.printlog('saving figure to '+figname,logger)
+        common.printlog('Saving imaging fit figure to '+figname,logger)
         s.plot_overdensity(pars=[None, pars_dict], ylim=[0.7, 1.3])
         plt.savefig(figname)
         plt.clf()
