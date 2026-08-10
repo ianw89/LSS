@@ -122,6 +122,10 @@ def compute_correlation_function(corr_type, edges, distance, nthreads=8, gpu=Fal
             shifted_positions1, shifted_weights1 = io.concatenate_data_randoms(data, shifted, **catalog_kwargs)[1]
         jack_positions = data_positions1
 
+        # Guard: skip subsamples too small for pycorr
+        if len(data_positions1[0]) < 1000:
+            return 
+
         if not autocorr:
             data, randoms = io.read_clustering_positions_weights(distance, name=['data', 'randoms'], recon_dir=recon_dir, rec_type=rec_type, tracer=tracer2, option=option, **catalog_kwargs)
             if with_shifted:
@@ -176,8 +180,8 @@ def compute_correlation_function(corr_type, edges, distance, nthreads=8, gpu=Fal
                 if with_shifted:
                     shifted_samples2 = [get_label(p) for p in shifted_positions2]
     
-        if args.ndens_cov:
-            wsum_data, wsum_randoms = calculate_density_realizations(data_samples1, data_weights1, randoms_samples1, randoms_weights1, args.njack*args.nradjack)
+            if args.ndens_cov:
+                wsum_data, wsum_randoms = calculate_density_realizations(data_samples1, data_weights1, randoms_samples1, randoms_weights1, args.njack*args.nradjack)
 
     # These keyword arguments are where the 'angular' upweighting gets threaded through to corrfunc
     kwargs = {}
@@ -480,8 +484,7 @@ if __name__ == '__main__':
     processed = []
 
     for f in files:
-        #if len(processed) > 0: # TODO Temp. Just do 1 for now
-        #    continue
+        not_enough_data = False
 
         fmt = f"{tracer}_(?P<subsample>.+)_(?P<region>NGC)_clustering.dat.fits" # Only match the NGC one to avoid duplication of the subsample
         match = re.match(fmt, f.name)
@@ -503,14 +506,21 @@ if __name__ == '__main__':
                 logger.info('Computing correlation function {} in region {}.'.format(corr_type, region))
                 edges = get_edges(corr_type=corr_type, bin_type=args.bin_type)
             
-                result, wang, wsum_data, wsum_randoms = compute_correlation_function(corr_type, edges=edges, distance=distance, nrandoms=args.nran, split_randoms_above=args.split_ran_above, nthreads=nthreads, gpu=gpu, region=region, weight_type=args.weight_type, njack=args.njack, nradjack=args.nradjack, wang=wang, mpicomm=mpicomm, mpiroot=mpiroot, rpcut=args.rpcut, thetacut=args.thetacut,nreal=args.nreal, **catalog_kwargs)
+                returned = compute_correlation_function(corr_type, edges=edges, distance=distance, nrandoms=args.nran, split_randoms_above=args.split_ran_above, nthreads=nthreads, gpu=gpu, region=region, weight_type=args.weight_type, njack=args.njack, nradjack=args.nradjack, wang=wang, mpicomm=mpicomm, mpiroot=mpiroot, rpcut=args.rpcut, thetacut=args.thetacut,nreal=args.nreal, **catalog_kwargs)
+
                 # Save pair counts
                 if mpicomm is None or mpicomm.rank == mpiroot:
-                    result.save(corr_fn(file_type='npy', region=region, out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs))
-                    # Save density realizations
-                    if wsum_data is not None and wsum_randoms is not None:
-                        np.save(corr_fn(file_type='ndens', region=region, out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs), (wsum_data, wsum_randoms))
+                    if returned is not None:
+                        result, wang, wsum_data, wsum_randoms = returned
+                        # Save correlation function
+                        result.save(corr_fn(file_type='npy', region=region, out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs))
+                        # Save density realizations
+                        if wsum_data is not None and wsum_randoms is not None:
+                            np.save(corr_fn(file_type='ndens', region=region, out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs), (wsum_data, wsum_randoms))
+                    else:
+                        not_enough_data = True
 
+            # Save angular upweighting results if computed
             if mpicomm is None or mpicomm.rank == mpiroot:
                 if wang is not None:
                     for name in wang:
@@ -518,50 +528,50 @@ if __name__ == '__main__':
                             wang[name].save(corr_fn(file_type='npy', region=region, out_dir=os.path.join(out_dir, 'wang'), **base_file_kwargs, wang=name))
 
         
-        onedone = True
+        if not not_enough_data:
 
-        # Save combination and .txt files
-        for corr_type in args.corr_type:
-            all_regions = regions.copy()
-            if mpicomm is None or mpicomm.rank == mpiroot:
-                if 'N' in regions and 'S' in regions:  # let's combine
-                    result = sum([TwoPointCorrelationFunction.load(
-                                  corr_fn(file_type='npy', region=region, out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs)).normalize() for region in ['N', 'S']])
-                    result.save(corr_fn(file_type='npy', region='NScomb', out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs))
-                    all_regions.append('NScomb')
-                if 'NGC' in regions and 'SGC' in regions:  # let's combine
-                    result = sum([TwoPointCorrelationFunction.load(
-                                  corr_fn(file_type='npy', region=region, out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs)).normalize() for region in ['NGC', 'SGC']])
-                    result.save(corr_fn(file_type='npy', region='GCcomb', out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs))
-                    all_regions.append('GCcomb')
-                    if args.ndens_cov:
-                        (wsum_data, wsum_randoms) = sum([np.load(corr_fn(file_type='ndens', region=region, out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs)) for region in ['NGC', 'SGC']])
-                        np.save(corr_fn(file_type='ndens', region='GCcomb', out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs), (wsum_data, wsum_randoms))
+            # Save combination and .txt files
+            for corr_type in args.corr_type:
+                all_regions = regions.copy()
+                if mpicomm is None or mpicomm.rank == mpiroot:
+                    if 'N' in regions and 'S' in regions:  # let's combine
+                        result = sum([TwoPointCorrelationFunction.load(
+                                    corr_fn(file_type='npy', region=region, out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs)).normalize() for region in ['N', 'S']])
+                        result.save(corr_fn(file_type='npy', region='NScomb', out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs))
+                        all_regions.append('NScomb')
+                    if 'NGC' in regions and 'SGC' in regions:  # let's combine
+                        result = sum([TwoPointCorrelationFunction.load(
+                                    corr_fn(file_type='npy', region=region, out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs)).normalize() for region in ['NGC', 'SGC']])
+                        result.save(corr_fn(file_type='npy', region='GCcomb', out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs))
+                        all_regions.append('GCcomb')
+                        if args.ndens_cov:
+                            (wsum_data, wsum_randoms) = sum([np.load(corr_fn(file_type='ndens', region=region, out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs)) for region in ['NGC', 'SGC']])
+                            np.save(corr_fn(file_type='ndens', region='GCcomb', out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs), (wsum_data, wsum_randoms))
 
-                if args.rebinning:
-                    for region in all_regions:
-                        txt_kwargs = base_file_kwargs.copy()
-                        txt_kwargs.update(region=region, out_dir=os.path.join(out_dir, corr_type))
-                        result = TwoPointCorrelationFunction.load(corr_fn(file_type='npy', **txt_kwargs))
-                        for factor in rebinning_factors:
-                            #result = TwoPointEstimator.load(fn)
-                            rebinned = result[:(result.shape[0] // factor) * factor:factor]
-                            txt_kwargs.update(bin_type=bintype_str+str(factor))
-                            if corr_type == 'smu':
-                                fn_txt = corr_fn(file_type='xismu', **txt_kwargs)
-                                rebinned.save_txt(fn_txt)
-                                fn_txt = corr_fn(file_type='xipoles', **txt_kwargs)
-                                rebinned.save_txt(fn_txt, ells=(0, 2, 4), ignore_nan=True)
-                                fn_txt = corr_fn(file_type='xiwedges', **txt_kwargs)
-                                rebinned.save_txt(fn_txt, wedges=(-1., -2./3, -1./3, 0., 1./3, 2./3, 1.))
-                            elif corr_type == 'rppi':
-                                fn_txt = corr_fn(file_type='wp', **txt_kwargs)
-                                rebinned.save_txt(fn_txt, pimax=40.)
-                                for pifac in pi_rebinning_factors:
-                                    rebinned = result[:(result.shape[0]//factor)*factor:factor,:(result.shape[1]//pifac)*pifac:pifac]
-                                    txt_kwargs.update(bin_type=bintype_str+str(factor)+'_'+str(pifac))
-                                    fn_txt = corr_fn(file_type='xirppi', **txt_kwargs)
+                    if args.rebinning:
+                        for region in all_regions:
+                            txt_kwargs = base_file_kwargs.copy()
+                            txt_kwargs.update(region=region, out_dir=os.path.join(out_dir, corr_type))
+                            result = TwoPointCorrelationFunction.load(corr_fn(file_type='npy', **txt_kwargs))
+                            for factor in rebinning_factors:
+                                #result = TwoPointEstimator.load(fn)
+                                rebinned = result[:(result.shape[0] // factor) * factor:factor]
+                                txt_kwargs.update(bin_type=bintype_str+str(factor))
+                                if corr_type == 'smu':
+                                    fn_txt = corr_fn(file_type='xismu', **txt_kwargs)
                                     rebinned.save_txt(fn_txt)
-                            elif corr_type == 'theta':
-                                fn_txt = corr_fn(file_type='theta', **txt_kwargs)
-                                rebinned.save_txt(fn_txt)
+                                    fn_txt = corr_fn(file_type='xipoles', **txt_kwargs)
+                                    rebinned.save_txt(fn_txt, ells=(0, 2, 4), ignore_nan=True)
+                                    fn_txt = corr_fn(file_type='xiwedges', **txt_kwargs)
+                                    rebinned.save_txt(fn_txt, wedges=(-1., -2./3, -1./3, 0., 1./3, 2./3, 1.))
+                                elif corr_type == 'rppi':
+                                    fn_txt = corr_fn(file_type='wp', **txt_kwargs)
+                                    rebinned.save_txt(fn_txt, pimax=40.)
+                                    for pifac in pi_rebinning_factors:
+                                        rebinned = result[:(result.shape[0]//factor)*factor:factor,:(result.shape[1]//pifac)*pifac:pifac]
+                                        txt_kwargs.update(bin_type=bintype_str+str(factor)+'_'+str(pifac))
+                                        fn_txt = corr_fn(file_type='xirppi', **txt_kwargs)
+                                        rebinned.save_txt(fn_txt)
+                                elif corr_type == 'theta':
+                                    fn_txt = corr_fn(file_type='theta', **txt_kwargs)
+                                    rebinned.save_txt(fn_txt)
