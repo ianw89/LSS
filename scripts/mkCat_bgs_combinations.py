@@ -55,6 +55,10 @@ parser.add_argument("--imsys_zbin", choices=['n', 'y', 'hi'], help="use separate
 
 parser.add_argument("--par", choices=['y', 'n'], help="run different random numbers in parallel?", default='y')
 
+#options for the third-level (property) adaptive binning, applied within each mag bin x quiescent/star-forming split
+parser.add_argument("--splitprop", help="name of the column to use for the adaptive sub-binning done within each mag bin x quiescent/star-forming split", type=str, required=True)
+parser.add_argument("--splitpropfile", help="path to a file with TARGETID and the --splitprop column to merge onto the group catalog", type=str, default='/global/cfs/cdirs/desi/users/ianw89/private/DATA/BGS_LOA/ian_BGS_Y3_merged.fits')
+
 setup_logging()
 
 from astropy.cosmology import z_at_value, FlatLambdaCDM
@@ -94,6 +98,9 @@ def make_adaptive_density_bins(data, n_bins, n_tail, alpha, limit):
     # Pilot density over the covered range (exclude extreme outliers)
     p_lo, p_hi = np.quantile(data, [limit, 1 - limit])
     n_pilot = min(2000, N // 50)
+    if limit == 0.0: # Goal is to capture everything in this case, extend edges to ensure downstream code will always include everything
+        p_hi *= 1.01
+        p_lo *= 0.99
     pilot_edges = np.linspace(p_lo, p_hi, n_pilot + 1)
     pilot_counts, _ = np.histogram(data, bins=pilot_edges)
     pilot_density = pilot_counts / np.diff(pilot_edges) / N
@@ -109,7 +116,7 @@ def make_adaptive_density_bins(data, n_bins, n_tail, alpha, limit):
     target = np.linspace(0, total, n_bins + 1)
     adaptive_edges = np.unique(np.interp(target, cumulative, pilot_edges))
     
-    # Extend tails with uniform bins at the edge. Capture some of the rarest halos. Mostly 0's out here.
+    # Extend tails with uniform bins at the edge if requested
     dl = np.median(np.diff(adaptive_edges[:10]))
     dr = np.median(np.diff(adaptive_edges[-10:]))
     left  = adaptive_edges[0]  - np.arange(n_tail, 0, -1) * dl
@@ -178,7 +185,7 @@ common.printlog(f'{len(fulldat)} full data rows read from {dirin+args.input_trac
 
 # Use group catalog to get centrals and quality cuts
 path = '/global/cfs/cdirs/desi/users/ianw89/groupcatalogs/BGS_Y3/v0.8/GROUP_CATALOG_BGS_Y3_1PASS_v0.8.fits'
-grpcat = Table(fitsio.read(path, columns=['TARGETID', 'Z_ASSIGNED_FLAG', 'ABS_MAG_R', 'G_R', 'IS_SAT']))
+grpcat = Table(fitsio.read(path, columns=['TARGETID', 'Z_ASSIGNED_FLAG', 'ABS_MAG_R', 'G_R', 'IS_SAT', 'QUIESCENT']))
 common.printlog(f'{len(grpcat)} group catalog rows read from {path}', logger)
 
 sel = grpcat['Z_ASSIGNED_FLAG'] == 0 # DESI spectroscopic data only
@@ -191,13 +198,16 @@ common.printlog(f'{len(grpcat)} group catalog rows after cuts (DESI spec + centr
 fulldat = join(fulldat, grpcat, keys=['TARGETID'], join_type="inner")
 common.printlog(f'{len(fulldat)} full data rows after joining with group catalog', logger)
 
-# Now read in merged file and get extra columns we need (no need yet)
-#extra = Table(fitsio.read('/global/cfs/cdirs/desi/users/ianw89/private/DATA/BGS_LOA/ian_BGS_Y3_merged.fits', columns=['TARGETID', 'c9050']))
-#fulldat = join(fulldat, extra, keys=['TARGETID'], join_type="inner")
+# Now read in merged file and get the extra column we need for the third-level split, if it's not in fulldat already
+if args.splitprop not in fulldat.colnames:
+    extra = Table(fitsio.read(args.splitpropfile, columns=['TARGETID', args.splitprop]))
+    common.printlog(f'{len(extra)} rows read from {args.splitpropfile} for property {args.splitprop}', logger)
+    fulldat = join(fulldat, extra, keys=['TARGETID'], join_type="inner")
+    common.printlog(f'{len(fulldat)} full data rows after joining with {args.splitprop} property file', logger)
 
 # Use my automated binnings strategy
 mag_bins = make_adaptive_density_bins(fulldat['ABS_MAG_R'], n_bins=10, n_tail=0, alpha=0.5, limit=0.01)
-mag_bins = np.round(mag_bins, 4)
+mag_bins = np.round(mag_bins, 2)
 
 # Save off the numpy array of mag_bins
 np.save(args.outdir+'/'+args.input_tracer+'_mag_bins.npy', mag_bins)
@@ -205,296 +215,316 @@ np.save(args.outdir+'/'+args.input_tracer+'_mag_bins.npy', mag_bins)
 for i in range(len(mag_bins)-1):
     mag_mask = (fulldat['ABS_MAG_R'] >= mag_bins[i]) & (fulldat['ABS_MAG_R'] < mag_bins[i+1])
     dat_inmagbin = fulldat[mag_mask]
-    gr_in_bin = dat_inmagbin['G_R']
-    gr_bins = make_adaptive_density_bins(gr_in_bin, n_bins=5, n_tail=0, alpha=0.5, limit=0.01)
-    gr_bins = np.round(gr_bins, 4)
 
-    np.save(args.outdir+'/'+args.input_tracer+'_gr_bins_formagbin'+str(i)+'.npy', gr_bins)
+    for is_quiescent in [True, False]:
+        qsf_label = 'Q' if is_quiescent else 'SF'
+        q_mask = dat_inmagbin['QUIESCENT'] == is_quiescent
+        dat_inqbin = dat_inmagbin[q_mask]
 
-    for j in range(len(gr_bins)-1):
-        gr_mask = (gr_in_bin >= gr_bins[j]) & (gr_in_bin < gr_bins[j+1])
+        prop_in_bin = dat_inqbin[args.splitprop]
 
-        common.printlog(f'Mag bin {i}: {mag_bins[i]:.4f} to {mag_bins[i+1]:.4f}, g-r bin {j}: {gr_bins[j]:.4f} to {gr_bins[j+1]:.4f}', logger)
+        # Some properties we should go all the way to the extremal values, but others we should not
+        limit = 0.01
 
-        dat_inbothbins = dat_inmagbin[gr_mask]
+        if args.splitprop == 'c9050':
+            limit = 0.0
+        if args.splitprop == 'LOGSSFR':
+            prop_in_bin[prop_in_bin < -16] = -16 # A floor value of -16 for finding bins since its ~0 SFR when this low, I assume differences are noise
 
-        # When calling xirunpc, a zmin and zmax is also provided. Should that cut just happen there since it's N vs S specific?
-        zmin = 0.001 # Reference measurement uses 0.005 but there is no need to match. For my faintest bin it only goes up to 0.005 zmax
-        zmax_S = float(get_max_observable_z(mag_bins[i+1], 19.5).round(4))
-        zmax_N = float(get_max_observable_z(mag_bins[i+1], 19.54).round(4))
-        zmax = min(zmax_N, zmax_S)
-        zmax_arr = np.where(dat_inbothbins['PHOTSYS'] == b'N', zmax_N, zmax_S)
+        prop_bins = make_adaptive_density_bins(prop_in_bin, n_bins=5, n_tail=0, alpha=0.5, limit=limit)
 
-        dz = zmax - zmin # TODO simplification for n(z) calculation...
-        common.printlog(f'  zmin = {zmin}, zmax_S = {zmax_S}, zmax_N = {zmax_N}', logger)
+        if args.splitprop == 'LOGSSFR':
+            # Change the label for the leftmost bin to -99 instead of ~ -16 for clarity
+            prop_bins[0] = -99
 
-        #write output to new "full" catalog at your defined location
-        tracer_out = args.input_tracer + "_CEN" + f'_mag{mag_bins[i]:.4f}to{mag_bins[i+1]:.4f}_gr{gr_bins[j]:.4f}to{gr_bins[j+1]:.4f}'
-        fout = args.outdir+'/'+tracer_out+'_full'+args.use_map_veto+'.dat.fits'
+        prop_bins = np.round(prop_bins, 3)
 
-        if args.mkfulldat == 'y':
-            if os.path.exists(fout) and args.overwrite == 'n':
-                common.printlog(f'Output file {fout} already exists, skipping', logger)
-            else:
-                common.write_LSS_scratchcp(dat_inbothbins, fout, logger=logger)
+        np.save(args.outdir+'/'+args.input_tracer+'_'+args.splitprop+'_bins_formagbin'+str(i)+'_'+qsf_label+'.npy', prop_bins)
 
-        #create "clustering" catalogs for data with no NGC/SGC split or FKP weights 
-        #needs to happen before randoms so randoms can get z and weights
-        weightileloc=True
-        if args.compmd == 'altmtl':
-            weightileloc = False
-        if mkclusdat:
-            if os.path.exists(args.outdir+'/'+tracer_out+'_clustering.dat.fits') and args.overwrite == 'n':
-                common.printlog(f'clustering catalog {args.outdir}/{tracer_out}_clustering.dat.fits already exists, skipping', logger)
-            else:
-                # Pass in data so it doesn't bother re-reading what we just wrote
-                ct.mkclusdat(args.outdir+'/'+tracer_out, weightileloc, tp=tracer_out, dchi2=dchi2, zmin=zmin, zmax=zmax_arr, use_map_veto=args.use_map_veto, data=dat_inbothbins)
+        for j in range(len(prop_bins)-1):
+            prop_mask = (prop_in_bin >= prop_bins[j]) & (prop_in_bin < prop_bins[j+1])
 
-        nzcompmd = 'ran'
-        if args.compmd == 'altmtl':
-            nzcompmd = args.compmd
-        # Columns to resample from the data
-        rcols=['Z','WEIGHT','WEIGHT_SYS','WEIGHT_COMP','WEIGHT_ZFAIL','TARGETID_DATA'] #columns to make sure are in the randoms
-        inds = np.arange(rm,rx)
+            common.printlog(f'Mag bin {i}: {mag_bins[i]:.4f} to {mag_bins[i+1]:.4f}, {qsf_label}, {args.splitprop} bin {j}: {prop_bins[j]:.4f} to {prop_bins[j+1]:.4f}', logger)
 
-        #make clustering catalogs for randoms
-        if mkclusran:
-            clus_arrays = [fitsio.read(args.outdir+'/'+tracer_out+'_clustering.dat.fits')]
+            dat_inallbins = dat_inqbin[prop_mask]
 
-            def _parfun_cr(ii):
-                ranin = rand_tbls[ii]
-                ranout = args.outdir+'/'+tracer_out+'_'+str(ii)+'_clustering.ran.fits'
-                if os.path.exists(ranout) and args.overwrite == 'n':
-                    common.printlog(f'ranout {ranout} already exists, skipping', logger)
-                    return
-                ct.mkclusran(ranin,args.outdir+'/'+tracer_out+'_',ii,rcols=rcols,clus_arrays=clus_arrays,use_map_veto=args.use_map_veto,compmd=nzcompmd,logger=logger,tp=args.input_tracer)
+            # When calling xirunpc, a zmin and zmax is also provided. Should that cut just happen there since it's N vs S specific?
+            zmin = 0.001 # Reference measurement uses 0.005 but there is no need to match. For my faintest bin it only goes up to 0.005 zmax
+            zmax_S = float(get_max_observable_z(mag_bins[i+1], 19.5).round(4))
+            zmax_N = float(get_max_observable_z(mag_bins[i+1], 19.54).round(4))
+            zmax = min(zmax_N, zmax_S)
+            zmax_arr = np.where(dat_inallbins['PHOTSYS'] == b'N', zmax_N, zmax_S)
+
+            dz = zmax - zmin # TODO simplification for n(z) calculation...
+            common.printlog(f'  zmin = {zmin}, zmax_S = {zmax_S}, zmax_N = {zmax_N}', logger)
+
+            #write output to new "full" catalog at your defined location
+            tracer_out = args.input_tracer + "_CEN" + f'_mag{mag_bins[i]:.2f}to{mag_bins[i+1]:.2f}' + f'_{qsf_label}' + f'_{args.splitprop}{prop_bins[j]:.3f}to{prop_bins[j+1]:.3f}'
+            fout = args.outdir+'/'+tracer_out+'_full'+args.use_map_veto+'.dat.fits'
+
+            if args.mkfulldat == 'y':
+                if os.path.exists(fout) and args.overwrite == 'n':
+                    common.printlog(f'Output file {fout} already exists, skipping', logger)
+                else:
+                    common.write_LSS_scratchcp(dat_inallbins, fout, logger=logger)
+
+            #create "clustering" catalogs for data with no NGC/SGC split or FKP weights 
+            #needs to happen before randoms so randoms can get z and weights
+            weightileloc=True
+            if args.compmd == 'altmtl':
+                weightileloc = False
+            if mkclusdat:
+                if os.path.exists(args.outdir+'/'+tracer_out+'_clustering.dat.fits') and args.overwrite == 'n':
+                    common.printlog(f'clustering catalog {args.outdir}/{tracer_out}_clustering.dat.fits already exists, skipping', logger)
+                else:
+                    # Pass in data so it doesn't bother re-reading what we just wrote
+                    ct.mkclusdat(args.outdir+'/'+tracer_out, weightileloc, tp=tracer_out, dchi2=dchi2, zmin=zmin, zmax=zmax_arr, use_map_veto=args.use_map_veto, data=dat_inallbins)
+
+            nzcompmd = 'ran'
+            if args.compmd == 'altmtl':
+                nzcompmd = args.compmd
+            # Columns to resample from the data
+            rcols=['Z','WEIGHT','WEIGHT_SYS','WEIGHT_COMP','WEIGHT_ZFAIL','TARGETID_DATA'] #columns to make sure are in the randoms
+            inds = np.arange(rm,rx)
+
+            #make clustering catalogs for randoms
+            if mkclusran:
+                clus_arrays = [fitsio.read(args.outdir+'/'+tracer_out+'_clustering.dat.fits')]
+
+                def _parfun_cr(ii):
+                    ranin = rand_tbls[ii]
+                    ranout = args.outdir+'/'+tracer_out+'_'+str(ii)+'_clustering.ran.fits'
+                    if os.path.exists(ranout) and args.overwrite == 'n':
+                        common.printlog(f'ranout {ranout} already exists, skipping', logger)
+                        return
+                    ct.mkclusran(ranin,args.outdir+'/'+tracer_out+'_',ii,rcols=rcols,clus_arrays=clus_arrays,use_map_veto=args.use_map_veto,compmd=nzcompmd,logger=logger,tp=args.input_tracer)
+                
+                if args.par == 'y':
+                    from multiprocessing import Pool
+                    with Pool() as pool:
+                        res = pool.map(_parfun_cr, inds)
+
+                else:
+                    for ii in inds:#range(rm,rx):
+                        _parfun_cr(ii)
+
+
+            nran = rx-rm
+            regions = ['NGC', 'SGC']
+
+            dirout = args.outdir #just because original copied code used dirout
+
+            #split catalogs NGC/SGC
+            # this reads in previously written cluster cat, maybe don't do that to save I/O TODO
+            if args.splitGC == 'y':
+                fb = dirout+'/'+tracer_out+'_'
+                splitGC(fb,'.dat')
+                def _spran(rann):
+                    splitGC(fb,'.ran',rann)
+                inds = np.arange(nran)
+                if args.par == 'y':
+                    from multiprocessing import Pool
+                    with Pool() as pool:
+                        res = pool.map(_spran, inds)
+                else:
+                    for rn in inds:#range(rm,rx):
+                        _spran(rn)
+
+            #this 1) calculates the n(z) for the sample
+            #2) adds the n(z) as a function of completeness to the catalogs (column NX)
+            #3) calculates the FKP weights based on NX
+            #4) refactors the weights (section 8.2 of the KP3 paper arXiv:2411.12020)
+            #5) writes the NGC/SGC clustering catalogs back out for data and randoms
+            #It needs to take inputs for completeness and mean weight as a function of NTILE, of the non-subsampled catalog, so that the angular upweighting option can remain consistent
+            def get_ntile_info(clus_orig_fname):
+                fd = fitsio.read(clus_orig_fname, columns=['NTILE', 'WEIGHT_COMP', 'FRAC_TLOBS_TILES'])
+                weight_ntl = np.bincount(fd['NTILE']-1, weights=fd['WEIGHT_COMP']) / np.bincount(fd['NTILE']-1) # mean of WEIGHT_COMP for each (positive integer) NTILE in the data. Note that the NTILE values are shifted down by 1 to avoid guaranteed division by zero for NTILE=0
+                comp_ntl = 1 / weight_ntl # the completeness is the inverse of the mean weight (for each NTILE). Indexed by NTILE-1
+                if args.compmd != 'altmtl':
+                    fttl = np.bincount(fd['NTILE']-1, weights=fd['FRAC_TLOBS_TILES']) / np.bincount(fd['NTILE']-1) # mean of FRAC_TLOBS_TILES for each (positive integer) NTILE in data (although shouldn't this be computed in randoms?). Note that the NTILE values are shifted down by 1 to avoid guaranteed division by zero for NTILE=0
+                    comp_ntl *= fttl # if not using altmtl, also multiply by the mean FRAC_TLOBS_TILES for each NTILE to get the completeness. Both are indexed by NTILE-1
+                return comp_ntl, weight_ntl # both are indexed by NTILE-1 as common.addnbar expects
             
-            if args.par == 'y':
-                from multiprocessing import Pool
-                with Pool() as pool:
-                    res = pool.map(_parfun_cr, inds)
+            if args.nz == 'y':
+                for reg in regions:#allreg:
+                    #file names
+                    fb = dirout+'/'+tracer_out+'_'+reg
+                    fcr = fb+'_0_clustering.ran.fits'
+                    fcd = fb+'_clustering.dat.fits'
+                    fout = fb+'_nz.txt'
 
-            else:
-                for ii in inds:#range(rm,rx):
-                    _parfun_cr(ii)
+                    # If fout already exists and we aren't overwriting, skip making n(z)
+                    if os.path.exists(fout) and args.overwrite != 'y':
+                        continue
 
+                    #make n(z)
+                    common.mknz(fcd,fcr,fout,bs=dz,zmin=zmin,zmax=zmax,compmd=nzcompmd)
+                    #do steps 2-5 above
+                    # For Y3 this is dir structure
+                    if survey == 'DA2':
+                        extra_dir = 'nonKP'
+                        if args.compmd == 'altmtl':
+                            extra_dir = 'PIP'
+                        clus_orig = dirin+'/'+extra_dir+'/'+args.input_tracer+'_'+reg+'_clustering.dat.fits'
+                    else:
+                        clus_orig = dirin+'/'+args.input_tracer+'_clustering.dat.fits'
+                    comp_ntl, weight_ntl = get_ntile_info(clus_orig)
+                    common.addnbar(fb,bs=dz,zmin=zmin,zmax=zmax,P0=7000,nran=nran,par=args.par,compmd=nzcompmd,comp_ntl=comp_ntl,weight_ntl=weight_ntl,logger=logger)
 
-        nran = rx-rm
-        regions = ['NGC', 'SGC']
+            # determine linear weights for imaging systematics
+            # this is new for doing after the fact based on clustering catalogs
+            skip_imsys = False
+            if args.imsys_clus == 'y':
+                zmin_imaging = 0.001
+                zmax_imaging = 1.0
 
-        dirout = args.outdir #just because original copied code used dirout
+                figname1 = dirout+'/'+tracer_out+'_N_'+str(zmin_imaging)+str(zmax_imaging)+'_linclusimsysfit.png'
+                figname2 = dirout+'/'+tracer_out+'_S_'+str(zmin_imaging)+str(zmax_imaging)+'_linclusimsysfit.png'
 
-        #split catalogs NGC/SGC
-        # this reads in previously written cluster cat, maybe don't do that to save I/O TODO
-        if args.splitGC == 'y':
-            fb = dirout+'/'+tracer_out+'_'
-            splitGC(fb,'.dat')
-            def _spran(rann):
-                splitGC(fb,'.ran',rann)
-            inds = np.arange(nran)
-            if args.par == 'y':
-                from multiprocessing import Pool
-                with Pool() as pool:
-                    res = pool.map(_spran, inds)
-            else:
-                for rn in inds:#range(rm,rx):
-                    _spran(rn)
+                if os.path.exists(figname1) and os.path.exists(figname2) and args.overwrite != 'y':
+                    common.printlog('Imaging systematic weight figures already exist and not overwriting; will skip.', logger)
+                    skip_imsys = True
 
-        #this 1) calculates the n(z) for the sample
-        #2) adds the n(z) as a function of completeness to the catalogs (column NX)
-        #3) calculates the FKP weights based on NX
-        #4) refactors the weights (section 8.2 of the KP3 paper arXiv:2411.12020)
-        #5) writes the NGC/SGC clustering catalogs back out for data and randoms
-        #It needs to take inputs for completeness and mean weight as a function of NTILE, of the non-subsampled catalog, so that the angular upweighting option can remain consistent
-        def get_ntile_info(clus_orig_fname):
-            fd = fitsio.read(clus_orig_fname, columns=['NTILE', 'WEIGHT_COMP', 'FRAC_TLOBS_TILES'])
-            weight_ntl = np.bincount(fd['NTILE']-1, weights=fd['WEIGHT_COMP']) / np.bincount(fd['NTILE']-1) # mean of WEIGHT_COMP for each (positive integer) NTILE in the data. Note that the NTILE values are shifted down by 1 to avoid guaranteed division by zero for NTILE=0
-            comp_ntl = 1 / weight_ntl # the completeness is the inverse of the mean weight (for each NTILE). Indexed by NTILE-1
-            if args.compmd != 'altmtl':
-                fttl = np.bincount(fd['NTILE']-1, weights=fd['FRAC_TLOBS_TILES']) / np.bincount(fd['NTILE']-1) # mean of FRAC_TLOBS_TILES for each (positive integer) NTILE in data (although shouldn't this be computed in randoms?). Note that the NTILE values are shifted down by 1 to avoid guaranteed division by zero for NTILE=0
-                comp_ntl *= fttl # if not using altmtl, also multiply by the mean FRAC_TLOBS_TILES for each NTILE to get the completeness. Both are indexed by NTILE-1
-            return comp_ntl, weight_ntl # both are indexed by NTILE-1 as common.addnbar expects
-        
-        if args.nz == 'y':
-            for reg in regions:#allreg:
-                #file names
-                fb = dirout+'/'+tracer_out+'_'+reg
-                fcr = fb+'_0_clustering.ran.fits'
-                fcd = fb+'_clustering.dat.fits'
-                fout = fb+'_nz.txt'
-
-                # If fout already exists and we aren't overwriting, skip making n(z)
-                if os.path.exists(fout) and args.overwrite != 'y':
+                if skip_imsys:
                     continue
 
-                #make n(z)
-                common.mknz(fcd,fcr,fout,bs=dz,zmin=zmin,zmax=zmax,compmd=nzcompmd)
-                #do steps 2-5 above
-                # For Y3 this is dir structure
-                if survey == 'DA2':
-                    extra_dir = 'nonKP'
-                    if args.compmd == 'altmtl':
-                        extra_dir = 'PIP'
-                    clus_orig = dirin+'/'+extra_dir+'/'+args.input_tracer+'_'+reg+'_clustering.dat.fits'
+                common.printlog('Calculating imaging systematic weights' ,logger)
+                #import package
+                from LSS.imaging import densvar 
+
+                #get maps to regress against
+                if args.usemaps == None:
+                    fit_maps = mainp.fit_maps
                 else:
-                    clus_orig = dirin+'/'+args.input_tracer+'_clustering.dat.fits'
-                comp_ntl, weight_ntl = get_ntile_info(clus_orig)
-                common.addnbar(fb,bs=dz,zmin=zmin,zmax=zmax,P0=7000,nran=nran,par=args.par,compmd=nzcompmd,comp_ntl=comp_ntl,weight_ntl=weight_ntl,logger=logger)
+                    fit_maps = [mapn for mapn in args.usemaps]
 
-        # determine linear weights for imaging systematics
-        # this is new for doing after the fact based on clustering catalogs
-        skip_imsys = False
-        if args.imsys_clus == 'y':
-            zmin_imaging = 0.001
-            zmax_imaging = 1.0
+                #get NGC/SGC catalogs and stack them (weights will be fit splitting the data into different photometric regions)
+                fname = os.path.join(dirout, tracer_out+'_NGC_clustering.dat.fits')
+                dat_ngc = Table(fitsio.read(fname))
+                fname = os.path.join(dirout, tracer_out+'_SGC_clustering.dat.fits')
+                dat_sgc = Table(fitsio.read(fname))
+                dat = vstack([dat_sgc,dat_ngc])
 
-            figname1 = dirout+'/'+tracer_out+'_N_'+str(zmin_imaging)+str(zmax_imaging)+'_linclusimsysfit.png'
-            figname2 = dirout+'/'+tracer_out+'_S_'+str(zmin_imaging)+str(zmax_imaging)+'_linclusimsysfit.png'
-
-            if os.path.exists(figname1) and os.path.exists(figname2) and args.overwrite != 'y':
-                common.printlog('Imaging systematic weight figures already exist and not overwriting; will skip.', logger)
-                skip_imsys = True
-
-            if skip_imsys:
-                continue
-
-            common.printlog('Calculating imaging systematic weights' ,logger)
-            #import package
-            from LSS.imaging import densvar 
-
-            #get maps to regress against
-            if args.usemaps == None:
-                fit_maps = mainp.fit_maps
-            else:
-                fit_maps = [mapn for mapn in args.usemaps]
-
-            #get NGC/SGC catalogs and stack them (weights will be fit splitting the data into different photometric regions)
-            fname = os.path.join(dirout, tracer_out+'_NGC_clustering.dat.fits')
-            dat_ngc = Table(fitsio.read(fname))
-            fname = os.path.join(dirout, tracer_out+'_SGC_clustering.dat.fits')
-            dat_sgc = Table(fitsio.read(fname))
-            dat = vstack([dat_sgc,dat_ngc])
-
-            #get randoms
-            ranl = []
-            for iran in range(0,args.nran4imsys):
-                ran = fitsio.read(os.path.join(dirout, tracer_out+'_NGC_'+str(iran)+'_clustering.ran.fits')) 
-                ranl.append(ran)
-                ran = fitsio.read(os.path.join(dirout, tracer_out+'_SGC_'+str(iran)+'_clustering.ran.fits')) 
-                ranl.append(ran)
-            rands = np.concatenate(ranl)
-            
-            #fiducial column name for weights, initialize as 1.
-            syscol = 'WEIGHT_IMLIN_CLUS' 
-            dat[syscol] = np.ones(len(dat))
-            #photometric regions
-            regl = ['S','N']
-            if args.input_tracer == 'QSO':
-                regl = ['DES','SnotDES','N']
-            
-            #do fit looping over regions and redshift bins
-            for reg in regl:
-                #handling for loading maps of potential systematics to regress against
-                regu = reg
-                if reg == 'DES' or reg == 'SnotDES':
-                    regu = 'S'
-                mptr = args.input_tracer
-                if args.input_tracer[:3] == 'BGS':
-                    mptr = 'BGS_BRIGHT' #bright and any/faint cover the same footprint so the same map is used for both
-                pwf = lssmapsdir+mptr+'_mapprops_healpix_nested_nside256_'+regu+'.fits'
-                sys_tab = Table.read(pwf)
-                cols = list(sys_tab.dtype.names)
-                for col in cols:
-                    #apply extinction corrections to depth to get total depth estimate
-                    if 'DEPTH' in col:
-                        bnd = col.split('_')[-1]
-                        sys_tab[col] *= 10**(-0.4*common.ext_coeff[bnd]*sys_tab['EBV'])
-                #Delta EBV using DESI EBV maps
-                debv = common.get_debv()
-                for ec in ['GR','RZ']:
-                    if 'EBV_DIFF_'+ec in fit_maps: 
-                        sys_tab['EBV_DIFF_'+ec] = debv['EBV_DIFF_'+ec]
+                #get randoms
+                ranl = []
+                for iran in range(0,args.nran4imsys):
+                    ran = fitsio.read(os.path.join(dirout, tracer_out+'_NGC_'+str(iran)+'_clustering.ran.fits')) 
+                    ranl.append(ran)
+                    ran = fitsio.read(os.path.join(dirout, tracer_out+'_SGC_'+str(iran)+'_clustering.ran.fits')) 
+                    ranl.append(ran)
+                rands = np.concatenate(ranl)
                 
-                selr = rands['PHOTSYS'] == reg
-
-                common.printlog('Getting weights for region '+reg+' and '+str(zmin_imaging)+'<z<'+str(zmax_imaging), logger)
-                if args.input_tracer == 'LRG' and args.usemaps == None:
-                    if reg == 'N':
-                        fitmapsbin = fit_maps
-                    else:
-                        if zmax == 0.6:
-                            fitmapsbin = mainp.fit_maps46s
-                        if zmax == 0.8:
-                            fitmapsbin = mainp.fit_maps68s
-                        if zmax == 1.1:
-                            fitmapsbin = mainp.fit_maps81s
-                else:
-                    fitmapsbin = fit_maps
-                use_maps = fitmapsbin
-                #now, everything in place to actually perform regression for this reg and zbin
-                figname = dirout+'/'+tracer_out+'_'+reg+'_'+str(zmin_imaging)+str(zmax_imaging)+'_linclusimsysfit.png'
-                wsysl = densvar.get_imweight(dat,rands,zmin_imaging,zmax_imaging,reg,fitmapsbin,use_maps,sys_tab=sys_tab,zcol='Z',modoutname = dirout+'/'+tracer_out+'_'+reg+'_'+str(zmin_imaging)+str(zmax_imaging)+'_linfitparam.txt',figname=figname,wtmd='clus', logger=logger)
-                #we want to update the weights for the selection of data just input to the regression
-                sel = wsysl != 1 
-                common.printlog(f'sel sum {np.sum(sel)} out of len {len(wsysl)}',logger)
-                dat[syscol][sel] = wsysl[sel]
-            #attach data to NGC/SGC catalogs, write those out
-            #we will do a join
-            dat.keep_columns(['TARGETID',syscol])
-            
-            if syscol in dat_ngc.colnames:
-                dat_ngc.remove_column(syscol)
-            dat_ngc = join(dat_ngc,dat,keys=['TARGETID'])
-            #apply weight to final weight columns, remove any previous weighting
-            dat_ngc['WEIGHT_SYS_OLD'] = dat_ngc['WEIGHT_SYS'] #keep the old sys weight
-            dat_ngc['WEIGHT'] /= dat_ngc['WEIGHT_SYS']
-            dat_ngc['WEIGHT_SYS'] = dat_ngc[syscol]
-            dat_ngc['WEIGHT'] *= dat_ngc['WEIGHT_SYS']
-            #write out NGC
-            common.write_LSS_scratchcp(dat_ngc,os.path.join(dirout, tracer_out+'_NGC_clustering.dat.fits'),logger=logger)
-            #do SGC
-            if syscol in dat_sgc.colnames:
-                dat_sgc.remove_column(syscol)
-            dat_sgc = join(dat_sgc,dat,keys=['TARGETID'])
-            #apply weight to final weight columns
-            dat_sgc['WEIGHT_SYS_OLD'] = dat_sgc['WEIGHT_SYS'] #keep the old sys weight
-            dat_sgc['WEIGHT'] /= dat_sgc['WEIGHT_SYS']
-            dat_sgc['WEIGHT_SYS'] = dat_sgc[syscol]
-            dat_sgc['WEIGHT'] *= dat_sgc['WEIGHT_SYS']
-            #write out SGC
-            common.write_LSS_scratchcp(dat_sgc,os.path.join(dirout, tracer_out+'_SGC_clustering.dat.fits'),logger=logger)
-
-        #column needs to be added to randoms
-        if args.imsys_clus_ran == 'y' and not skip_imsys:
-            #do randoms
-            syscol = 'WEIGHT_IMLIN_CLUS'
-            fname = os.path.join(dirout, tracer_out+'_NGC_clustering.dat.fits')
-            dat_ngc = Table(fitsio.read(fname,columns=['TARGETID',syscol]))
-            fname = os.path.join(dirout, tracer_out+'_SGC_clustering.dat.fits')
-            dat_sgc = Table(fitsio.read(fname,columns=['TARGETID',syscol]))
-            dat = vstack([dat_sgc,dat_ngc])
-            dat.rename_column('TARGETID','TARGETID_DATA') #randoms have their weights modulated based on the data used for the redshift
-            regl = ['NGC','SGC']
-            def _add2ran(rann):
+                #fiducial column name for weights, initialize as 1.
+                syscol = 'WEIGHT_IMLIN_CLUS' 
+                dat[syscol] = np.ones(len(dat))
+                #photometric regions
+                regl = ['S','N']
+                if args.input_tracer == 'QSO':
+                    regl = ['DES','SnotDES','N']
+                
+                #do fit looping over regions and redshift bins
                 for reg in regl:
-                    ran_fn = os.path.join(dirout, tracer_out+'_'+reg+'_'+str(rann)+'_clustering.ran.fits')
-                    ran = Table(fitsio.read(ran_fn))
-                    if syscol in ran.colnames:
-                        ran.remove_column(syscol)
-                    ran = join(ran,dat,keys=['TARGETID_DATA'])
-                    ran['WEIGHT_SYS_OLD'] = ran['WEIGHT_SYS'] #keep the old sys weight
-                    ran['WEIGHT'] /= ran['WEIGHT_SYS'] #remove effect of any original weighting
-                    ran['WEIGHT'] *= ran[syscol]
-                    ran['WEIGHT_SYS'] = ran[syscol]
-                    common.write_LSS_scratchcp(ran,ran_fn,logger=logger)
+                    #handling for loading maps of potential systematics to regress against
+                    regu = reg
+                    if reg == 'DES' or reg == 'SnotDES':
+                        regu = 'S'
+                    mptr = args.input_tracer
+                    if args.input_tracer[:3] == 'BGS':
+                        mptr = 'BGS_BRIGHT' #bright and any/faint cover the same footprint so the same map is used for both
+                    pwf = lssmapsdir+mptr+'_mapprops_healpix_nested_nside256_'+regu+'.fits'
+                    sys_tab = Table.read(pwf)
+                    cols = list(sys_tab.dtype.names)
+                    for col in cols:
+                        #apply extinction corrections to depth to get total depth estimate
+                        if 'DEPTH' in col:
+                            bnd = col.split('_')[-1]
+                            sys_tab[col] *= 10**(-0.4*common.ext_coeff[bnd]*sys_tab['EBV'])
+                    #Delta EBV using DESI EBV maps
+                    debv = common.get_debv()
+                    for ec in ['GR','RZ']:
+                        if 'EBV_DIFF_'+ec in fit_maps: 
+                            sys_tab['EBV_DIFF_'+ec] = debv['EBV_DIFF_'+ec]
+                    
+                    selr = rands['PHOTSYS'] == reg
 
-            if args.par == 'y':
-                from multiprocessing import Pool
-                with Pool() as pool:
-                    res = pool.map(_add2ran, inds)
-            else:
-                for rn in inds:#range(rm,rx):
-                    _add2ran(rn)
+                    common.printlog('Getting weights for region '+reg+' and '+str(zmin_imaging)+'<z<'+str(zmax_imaging), logger)
+                    if args.input_tracer == 'LRG' and args.usemaps == None:
+                        if reg == 'N':
+                            fitmapsbin = fit_maps
+                        else:
+                            if zmax == 0.6:
+                                fitmapsbin = mainp.fit_maps46s
+                            if zmax == 0.8:
+                                fitmapsbin = mainp.fit_maps68s
+                            if zmax == 1.1:
+                                fitmapsbin = mainp.fit_maps81s
+                    else:
+                        fitmapsbin = fit_maps
+                    use_maps = fitmapsbin
+                    #now, everything in place to actually perform regression for this reg and zbin
+                    figname = dirout+'/'+tracer_out+'_'+reg+'_'+str(zmin_imaging)+str(zmax_imaging)+'_linclusimsysfit.png'
+                    wsysl = densvar.get_imweight(dat,rands,zmin_imaging,zmax_imaging,reg,fitmapsbin,use_maps,sys_tab=sys_tab,zcol='Z',modoutname = dirout+'/'+tracer_out+'_'+reg+'_'+str(zmin_imaging)+str(zmax_imaging)+'_linfitparam.txt',figname=figname,wtmd='clus', logger=logger)
+                    #we want to update the weights for the selection of data just input to the regression
+                    sel = wsysl != 1 
+                    common.printlog(f'sel sum {np.sum(sel)} out of len {len(wsysl)}',logger)
+                    dat[syscol][sel] = wsysl[sel]
+                #attach data to NGC/SGC catalogs, write those out
+                #we will do a join
+                dat.keep_columns(['TARGETID',syscol])
+                
+                if syscol in dat_ngc.colnames:
+                    dat_ngc.remove_column(syscol)
+                dat_ngc = join(dat_ngc,dat,keys=['TARGETID'])
+                #apply weight to final weight columns, remove any previous weighting
+                dat_ngc['WEIGHT_SYS_OLD'] = dat_ngc['WEIGHT_SYS'] #keep the old sys weight
+                dat_ngc['WEIGHT'] /= dat_ngc['WEIGHT_SYS']
+                dat_ngc['WEIGHT_SYS'] = dat_ngc[syscol]
+                dat_ngc['WEIGHT'] *= dat_ngc['WEIGHT_SYS']
+                #write out NGC
+                common.write_LSS_scratchcp(dat_ngc,os.path.join(dirout, tracer_out+'_NGC_clustering.dat.fits'),logger=logger)
+                #do SGC
+                if syscol in dat_sgc.colnames:
+                    dat_sgc.remove_column(syscol)
+                dat_sgc = join(dat_sgc,dat,keys=['TARGETID'])
+                #apply weight to final weight columns
+                dat_sgc['WEIGHT_SYS_OLD'] = dat_sgc['WEIGHT_SYS'] #keep the old sys weight
+                dat_sgc['WEIGHT'] /= dat_sgc['WEIGHT_SYS']
+                dat_sgc['WEIGHT_SYS'] = dat_sgc[syscol]
+                dat_sgc['WEIGHT'] *= dat_sgc['WEIGHT_SYS']
+                #write out SGC
+                common.write_LSS_scratchcp(dat_sgc,os.path.join(dirout, tracer_out+'_SGC_clustering.dat.fits'),logger=logger)
+
+            #column needs to be added to randoms
+            if args.imsys_clus_ran == 'y' and not skip_imsys:
+                #do randoms
+                syscol = 'WEIGHT_IMLIN_CLUS'
+                fname = os.path.join(dirout, tracer_out+'_NGC_clustering.dat.fits')
+                dat_ngc = Table(fitsio.read(fname,columns=['TARGETID',syscol]))
+                fname = os.path.join(dirout, tracer_out+'_SGC_clustering.dat.fits')
+                dat_sgc = Table(fitsio.read(fname,columns=['TARGETID',syscol]))
+                dat = vstack([dat_sgc,dat_ngc])
+                dat.rename_column('TARGETID','TARGETID_DATA') #randoms have their weights modulated based on the data used for the redshift
+                regl = ['NGC','SGC']
+                def _add2ran(rann):
+                    for reg in regl:
+                        ran_fn = os.path.join(dirout, tracer_out+'_'+reg+'_'+str(rann)+'_clustering.ran.fits')
+                        ran = Table(fitsio.read(ran_fn))
+                        if syscol in ran.colnames:
+                            ran.remove_column(syscol)
+                        ran = join(ran,dat,keys=['TARGETID_DATA'])
+                        ran['WEIGHT_SYS_OLD'] = ran['WEIGHT_SYS'] #keep the old sys weight
+                        ran['WEIGHT'] /= ran['WEIGHT_SYS'] #remove effect of any original weighting
+                        ran['WEIGHT'] *= ran[syscol]
+                        ran['WEIGHT_SYS'] = ran[syscol]
+                        common.write_LSS_scratchcp(ran,ran_fn,logger=logger)
+
+                if args.par == 'y':
+                    from multiprocessing import Pool
+                    with Pool() as pool:
+                        res = pool.map(_add2ran, inds)
+                else:
+                    for rn in inds:#range(rm,rx):
+                        _add2ran(rn)
 
 
 common.printlog('Script Finished',logger)
