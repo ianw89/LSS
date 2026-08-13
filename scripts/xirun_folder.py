@@ -392,7 +392,7 @@ if __name__ == '__main__':
     parser.add_argument('--rec_type', help='reconstruction algorithm + reconstruction convention, but only if included in the catalog filename between dots, otherwise leave blank', choices=['IFTPrecsym', 'IFTPreciso','IFTrecsym', 'IFTreciso', 'MGrecsym', 'MGreciso'], type=str, default=None)
     parser.add_argument('--recon_dir', help='if recon catalogs are in a subdirectory, put that here', type=str, default='n')
     parser.add_argument('--cosmo', help='e.g., AbacusSummit cosmology', type=int, default=0)
-
+    parser.add_argument('--overwrite', help='whether to overwrite existing files or skip calculations if already performed', type=str, default='y', choices=['y', 'n'])
     parser.add_argument('--rpcut', help='apply the rp-cut', type=float, default=None)
     parser.add_argument('--thetacut', help='apply the theta-cut (more up-to-date fibre collision correction), standard: 0.05', type=float, default=None)
     parser.add_argument('--nreal', help='number of realizations for bitweights', type=int, default=129)
@@ -503,6 +503,16 @@ if __name__ == '__main__':
 
             wang = None
             for corr_type in args.corr_type:
+                fn = corr_fn(file_type='npy', region=region, out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs)
+                fn_ndens = corr_fn(file_type='ndens', region=region, out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs)
+
+                # If it already exists, skip it
+                if mpicomm is None or mpicomm.rank == mpiroot:
+                    if os.path.exists(fn) and args.overwrite == 'n':
+                        if not args.ndens_cov or os.path.exists(fn_ndens):
+                            logger.info('SKIPPING correlation function {} in region {} as the results file already exists.'.format(corr_type, region))
+                            continue
+
                 logger.info('Computing correlation function {} in region {}.'.format(corr_type, region))
                 edges = get_edges(corr_type=corr_type, bin_type=args.bin_type)
             
@@ -513,15 +523,15 @@ if __name__ == '__main__':
                     if returned is not None:
                         result, wang, wsum_data, wsum_randoms = returned
                         # Save correlation function
-                        result.save(corr_fn(file_type='npy', region=region, out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs))
+                        result.save(fn)
                         # Save density realizations
                         if wsum_data is not None and wsum_randoms is not None:
-                            np.save(corr_fn(file_type='ndens', region=region, out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs), (wsum_data, wsum_randoms))
+                            np.save(fn_ndens, (wsum_data, wsum_randoms))
                     else:
                         not_enough_data = True
 
             # Save angular upweighting results if computed
-            if mpicomm is None or mpicomm.rank == mpiroot:
+            if mpicomm is None or mpicomm.rank == mpiroot: # TODO overwrite check here too? or earlier so we don't compute?
                 if wang is not None:
                     for name in wang:
                         if wang[name] is not None:
@@ -535,20 +545,27 @@ if __name__ == '__main__':
                 all_regions = regions.copy()
                 if mpicomm is None or mpicomm.rank == mpiroot:
                     if 'N' in regions and 'S' in regions:  # let's combine
-                        result = sum([TwoPointCorrelationFunction.load(
-                                    corr_fn(file_type='npy', region=region, out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs)).normalize() for region in ['N', 'S']])
-                        result.save(corr_fn(file_type='npy', region='NScomb', out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs))
+                        # check if summed already exists
+                        fn_nscomb = corr_fn(file_type='npy', region='NScomb', out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs)
+                        if not os.path.exists(fn_nscomb) or args.overwrite == 'y':
+                            result = sum([TwoPointCorrelationFunction.load(
+                                        corr_fn(file_type='npy', region=region, out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs)).normalize() for region in ['N', 'S']])
+                            result.save(fn_nscomb)
                         all_regions.append('NScomb')
                     if 'NGC' in regions and 'SGC' in regions:  # let's combine
                         result = sum([TwoPointCorrelationFunction.load(
                                     corr_fn(file_type='npy', region=region, out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs)).normalize() for region in ['NGC', 'SGC']])
-                        result.save(corr_fn(file_type='npy', region='GCcomb', out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs))
+                        fn_gccomb = corr_fn(file_type='npy', region='GCcomb', out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs)
+                        if not os.path.exists(fn_gccomb) or args.overwrite == 'y':
+                            result.save(fn_gccomb)
                         all_regions.append('GCcomb')
                         if args.ndens_cov:
-                            (wsum_data, wsum_randoms) = sum([np.load(corr_fn(file_type='ndens', region=region, out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs)) for region in ['NGC', 'SGC']])
-                            np.save(corr_fn(file_type='ndens', region='GCcomb', out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs), (wsum_data, wsum_randoms))
+                            fn_ndens_gccomb = corr_fn(file_type='ndens', region='GCcomb', out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs)
+                            if not os.path.exists(fn_ndens_gccomb) or args.overwrite == 'y':
+                                (wsum_data, wsum_randoms) = sum([np.load(corr_fn(file_type='ndens', region=region, out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs)) for region in ['NGC', 'SGC']])
+                                np.save(fn_ndens_gccomb, (wsum_data, wsum_randoms))
 
-                    if args.rebinning:
+                    if args.rebinning: # TODO overwrite check here too
                         for region in all_regions:
                             txt_kwargs = base_file_kwargs.copy()
                             txt_kwargs.update(region=region, out_dir=os.path.join(out_dir, corr_type))

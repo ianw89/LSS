@@ -87,43 +87,6 @@ def splitGC(flroot,datran='.dat',rann=0):
     common.write_LSS_scratchcp(fn[~sel_ngc],outf_sgc,logger=logger)
 
 
-def make_adaptive_density_bins(data, n_bins, n_tail, alpha, limit):
-    """
-    Widths go as 1/f(x)^alpha (alpha=0.5: sqrt-density spacing).
-    Implemented by spacing edges evenly in cumulative(f^alpha) space.
-    Tail extensions use the edge bin spacing for a smooth cutoff to zero.
-    """
-    N = len(data)
-    
-    # Pilot density over the covered range (exclude extreme outliers)
-    p_lo, p_hi = np.quantile(data, [limit, 1 - limit])
-    n_pilot = min(2000, N // 50)
-    if limit == 0.0: # Goal is to capture everything in this case, extend edges to ensure downstream code will always include everything
-        p_hi *= 1.01
-        p_lo *= 0.99
-    pilot_edges = np.linspace(p_lo, p_hi, n_pilot + 1)
-    pilot_counts, _ = np.histogram(data, bins=pilot_edges)
-    pilot_density = pilot_counts / np.diff(pilot_edges) / N
-    # Floor: avoid pathological zero regions swallowing all the tail budget
-    #floor = pilot_density[pilot_density > 0].min() * 0.01
-    #pilot_density = np.maximum(pilot_density, floor)
-    
-    # Cumulative of f^alpha → spacing evenly in this = widths ∝ 1/f^alpha
-    dx = np.diff(pilot_edges)
-    cumulative = np.concatenate([[0], np.cumsum(pilot_density**alpha * dx)])
-    total = cumulative[-1]
-    
-    target = np.linspace(0, total, n_bins + 1)
-    adaptive_edges = np.unique(np.interp(target, cumulative, pilot_edges))
-    
-    # Extend tails with uniform bins at the edge if requested
-    dl = np.median(np.diff(adaptive_edges[:10]))
-    dr = np.median(np.diff(adaptive_edges[-10:]))
-    left  = adaptive_edges[0]  - np.arange(n_tail, 0, -1) * dl
-    right = adaptive_edges[-1] + np.arange(1, n_tail + 1)  * dr
-    
-    return np.concatenate([left, adaptive_edges, right])
-
 args = parser.parse_args()
 args.input_tracer = 'BGS_BRIGHT' 
 common.printlog(str(args),logger)
@@ -206,7 +169,7 @@ if args.splitprop not in fulldat.colnames:
     common.printlog(f'{len(fulldat)} full data rows after joining with {args.splitprop} property file', logger)
 
 # Use my automated binnings strategy
-mag_bins = make_adaptive_density_bins(fulldat['ABS_MAG_R'], n_bins=10, n_tail=0, alpha=0.5, limit=0.01)
+mag_bins = common.make_adaptive_density_bins(fulldat['ABS_MAG_R'], n_bins=10, n_tail=0, alpha=0.5, limit=0.01)
 mag_bins = np.round(mag_bins, 2)
 
 # Save off the numpy array of mag_bins
@@ -220,18 +183,31 @@ for i in range(len(mag_bins)-1):
         qsf_label = 'Q' if is_quiescent else 'SF'
         q_mask = dat_inmagbin['QUIESCENT'] == is_quiescent
         dat_inqbin = dat_inmagbin[q_mask]
-
-        prop_in_bin = dat_inqbin[args.splitprop]
-
         # Some properties we should go all the way to the extremal values, but others we should not
         limit = 0.01
+
+        prop_in_bin = dat_inqbin[args.splitprop]
 
         if args.splitprop == 'c9050':
             limit = 0.0
         if args.splitprop == 'LOGSSFR':
-            prop_in_bin[prop_in_bin < -16] = -16 # A floor value of -16 for finding bins since its ~0 SFR when this low, I assume differences are noise
+            dat_inqbin[args.splitprop][prop_in_bin < -16] = -16 # A floor value of -16 for finding bins since its ~0 SFR when this low, I assume differences are noise
 
-        prop_bins = make_adaptive_density_bins(prop_in_bin, n_bins=5, n_tail=0, alpha=0.5, limit=limit)
+        # Remove nans
+        dat_inqbin = dat_inqbin[~np.isnan(prop_in_bin)]
+        prop_in_bin = dat_inqbin[args.splitprop]
+
+        # Check how much data is in this mag x QvsSF bin and print it
+        common.printlog(f'Mag bin {i}: {mag_bins[i]:.2f} to {mag_bins[i+1]:.2f}, ({qsf_label}) count: {len(prop_in_bin)}', logger)
+
+        # Faintest Q bin gets ~10000 galaxies, and the uneven binning can make some samples so small (< 1000 or so) that
+        # pycorr crashes. Let's just go for 3 bins in that case
+        if len(prop_in_bin) < 15000:
+            n_bins = 3
+        else:
+            n_bins = 5
+
+        prop_bins = common.make_adaptive_density_bins(prop_in_bin, n_bins=n_bins, n_tail=0, alpha=0.5, limit=limit)
 
         if args.splitprop == 'LOGSSFR':
             # Change the label for the leftmost bin to -99 instead of ~ -16 for clarity
