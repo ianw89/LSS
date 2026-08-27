@@ -172,8 +172,23 @@ if args.splitprop not in fulldat.colnames:
 mag_bins = common.make_adaptive_density_bins(fulldat['ABS_MAG_R'], n_bins=10, n_tail=0, alpha=0.5, limit=0.01)
 mag_bins = np.round(mag_bins, 2)
 
+def get_binned_mean(data, bin_edges):
+    """Bin the data using the provided edges and compute the mean value in each bin."""
+    
+    indices = np.digitize(data, bin_edges)
+    sums = np.bincount(indices, weights=data, minlength=len(bin_edges) + 1)
+    counts = np.bincount(indices, minlength=len(bin_edges) + 1)
+    means = sums / np.where(counts == 0, 1, counts)
+    means[counts == 0] = np.nan
+
+    # Ignore data to the left of leftmost edge and right of rightmost edge
+    return means[1:len(bin_edges)]
+
+mag_bins_means = get_binned_mean(fulldat['ABS_MAG_R'], mag_bins)
+
 # Save off the numpy array of mag_bins
 np.save(args.outdir+'/'+args.input_tracer+'_mag_bins.npy', mag_bins)
+np.save(args.outdir+'/'+args.input_tracer+'_mag_bins_means.npy', mag_bins_means)
 
 for i in range(len(mag_bins)-1):
     mag_mask = (fulldat['ABS_MAG_R'] >= mag_bins[i]) & (fulldat['ABS_MAG_R'] < mag_bins[i+1])
@@ -214,8 +229,10 @@ for i in range(len(mag_bins)-1):
             prop_bins[0] = -99
 
         prop_bins = np.round(prop_bins, 3)
+        prop_bins_means = get_binned_mean(prop_in_bin, prop_bins)
 
         np.save(args.outdir+'/'+args.input_tracer+'_'+args.splitprop+'_bins_formagbin'+str(i)+'_'+qsf_label+'.npy', prop_bins)
+        np.save(args.outdir+'/'+args.input_tracer+'_'+args.splitprop+'_bins_means_formagbin'+str(i)+'_'+qsf_label+'.npy', prop_bins_means)
 
         for j in range(len(prop_bins)-1):
             prop_mask = (prop_in_bin >= prop_bins[j]) & (prop_in_bin < prop_bins[j+1])
