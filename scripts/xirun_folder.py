@@ -18,6 +18,7 @@ import logging
 from pathlib import Path
 import numpy as np
 import re
+import Corrfunc
 
 from astropy.table import Table, vstack
 from matplotlib import pyplot as plt
@@ -123,7 +124,7 @@ def compute_correlation_function(corr_type, edges, distance, nthreads=8, gpu=Fal
         jack_positions = data_positions1
 
         # Guard: skip subsamples too small for pycorr
-        if len(data_positions1[0]) < 1000:
+        if len(data_positions1[0]) < 900: # BUG TODO
             return 
 
         if not autocorr:
@@ -398,6 +399,10 @@ if __name__ == '__main__':
     parser.add_argument('--nreal', help='number of realizations for bitweights', type=int, default=129)
     setup_logging()
     args = parser.parse_args()
+
+
+    logger.info(f"Corrfunc file location: {Corrfunc.__file__}")
+    logger.info(f"Python executable: {sys.executable}")
 
     gpu, nthreads = args.gpu, args.nthreads
     if nthreads is None:
