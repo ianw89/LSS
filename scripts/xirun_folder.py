@@ -123,8 +123,9 @@ def compute_correlation_function(corr_type, edges, distance, nthreads=8, gpu=Fal
             shifted_positions1, shifted_weights1 = io.concatenate_data_randoms(data, shifted, **catalog_kwargs)[1]
         jack_positions = data_positions1
 
-        # Guard: skip subsamples too small for pycorr
-        if len(data_positions1[0]) < 900: # BUG TODO
+        # Guard: skip subsamples too small for pycorr. Crashes when there are 0 pairs in a bin maybe?
+        # Annoyingly because we evaluate on NGC and SGC seperately, 10000 gals into 3 samples and then split into NGC/SGC often give less than this.
+        if len(data_positions1[0]) < 900: # BUG TODO. 900 works OK, 800 seems to fail sometimes.
             return 
 
         if not autocorr:
@@ -366,6 +367,7 @@ def corr_fn(file_type='npy', region='', tracer='ELG', tracer2=None, recon_dir='n
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
+    parser.add_argument('--select', help='subsamples to select, they must contain the specified string', type=str, default=None)
     parser.add_argument('--tracer', help='tracer(s) to be selected - 2 for cross-correlation', type=str, nargs='+', default=['LRG'])
     # Set basedir to the actual location of catalogs when starting with full (not clustering) catalogs for mocks. No need to set survey, verspec, version then.
     parser.add_argument('--basedir', help='where to find catalogs', type=str, default='/dvs_ro/cfs/cdirs/desi/survey/catalogs/')
@@ -501,6 +503,16 @@ if __name__ == '__main__':
             continue
         processed.append(tracer_full)
 
+        if args.select is not None and args.select == '2p': # for mag and SFvsQ only samples
+            if 'SHAPE_R' in subsample or 'LOGMSTAR' in subsample or 'LOGMSTAR' in subsample or 'LOGSSFR' in subsample or 'HALPHA_EW' in subsample or 'DN4000' in subsample or 'G_R_BEST' in subsample or 'ABS_MAG_R' in subsample or 'c9050' in subsample:
+                logger.info(f"Skipping tracer {tracer_full} as it does not match the selection criteria.")
+                continue
+        elif args.select is not None and args.select not in subsample:
+            logger.info(f"Skipping tracer {tracer_full} as it does not match the selection criteria.")
+            continue
+
+        logger.info(f"Processing tracer {tracer_full}.")
+
         catalog_kwargs = dict(tracer=tracer_full, tracer2=tracer2, survey=args.survey, cat_dir=cat_dir, recon_dir=args.recon_dir,rec_type=args.rec_type) # survey required for zdone
         base_file_kwargs = dict(tracer=tracer_full, tracer2=tracer2, recon_dir=args.recon_dir,rec_type=args.rec_type, weight_type=args.weight_type, bin_type=bintype_str, njack=args.njack, nradjack=args.nradjack, nrandoms=args.nran, split_randoms_above=args.split_ran_above, rpcut=args.rpcut, thetacut=args.thetacut)
         
@@ -597,3 +609,7 @@ if __name__ == '__main__':
                                 elif corr_type == 'theta':
                                     fn_txt = corr_fn(file_type='theta', **txt_kwargs)
                                     rebinned.save_txt(fn_txt)
+
+
+
+    logger.info(f"Finished computing correlation functions for tracer {tracer} and subsample {subsample}.")
