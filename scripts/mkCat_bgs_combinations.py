@@ -87,7 +87,41 @@ def splitGC(flroot,datran='.dat',rann=0):
     common.write_LSS_scratchcp(fn[sel_ngc],outf_ngc,logger=logger)
     common.write_LSS_scratchcp(fn[~sel_ngc],outf_sgc,logger=logger)
 
-def process_sample(tracer_out, fout, dat_inallbins, zmin, zmax, zmax_arr):
+def write_clus_header_stats(fout_clus, splitprop, sample_meta=None):
+    """Compute summary statistics of the actual rows written to the clustering.dat.fits
+    catalog (post good-z/zmin/zmax cuts) and store them as FITS header keywords, since
+    the two-point correlation function results for this subsample don't exist yet."""
+    with fitsio.FITS(fout_clus, 'r') as fits:
+        hdu = fits['LSS']
+        cols = hdu.get_colnames()
+        read_cols = ['Z']
+        if 'ABS_MAG_R' in cols:
+            read_cols.append('ABS_MAG_R')
+        if splitprop is not None and splitprop in cols:
+            read_cols.append(splitprop)
+        dat = hdu.read(columns=read_cols)
+
+    header = dict(sample_meta) if sample_meta is not None else {}
+    header['NGAL'] = len(dat)
+    header['MEANZ'] = float(np.mean(dat['Z']))
+    header['VARZ'] = float(np.var(dat['Z']))
+    header['MEDZ'] = float(np.median(dat['Z']))
+    if 'ABS_MAG_R' in read_cols:
+        header['MEANABSR'] = float(np.mean(dat['ABS_MAG_R']))
+        header['VARABSR'] = float(np.var(dat['ABS_MAG_R']))
+        header['MEDABSR'] = float(np.median(dat['ABS_MAG_R']))
+    if splitprop is not None and splitprop in read_cols:
+        header['PROPNAME'] = splitprop
+        header['MEANPROP'] = float(np.mean(dat[splitprop]))
+        header['VARPROP'] = float(np.var(dat[splitprop]))
+        header['MEDPROP'] = float(np.median(dat[splitprop]))
+
+    with fitsio.FITS(fout_clus, 'rw') as fits:
+        hdu = fits['LSS']
+        for key, value in header.items():
+            hdu.write_key(key, value)
+
+def process_sample(tracer_out, fout, dat_inallbins, zmin, zmax, zmax_arr, sample_meta=None):
     if args.mkfulldat == 'y':
         if os.path.exists(fout) and args.overwrite == 'n':
             common.printlog(f'Output file {fout} already exists, skipping', logger)
@@ -99,12 +133,18 @@ def process_sample(tracer_out, fout, dat_inallbins, zmin, zmax, zmax_arr):
     weightileloc=True
     if args.compmd == 'altmtl':
         weightileloc = False
+    fout_clus = args.outdir+'/'+tracer_out+'_clustering.dat.fits'
     if mkclusdat:
-        if os.path.exists(args.outdir+'/'+tracer_out+'_clustering.dat.fits') and args.overwrite == 'n':
-            common.printlog(f'clustering catalog {args.outdir}/{tracer_out}_clustering.dat.fits already exists, skipping', logger)
+        if os.path.exists(fout_clus) and args.overwrite == 'n':
+            common.printlog(f'clustering catalog {fout_clus} already exists, skipping', logger)
         else:
+            # keep ABS_MAG_R (and the splitprop column, if any) so summary stats can be computed from the actual written rows
+            extracols = ['ABS_MAG_R']
+            if args.splitprop is not None:
+                extracols.append(args.splitprop)
             # Pass in data so it doesn't bother re-reading what we just wrote
-            ct.mkclusdat(args.outdir+'/'+tracer_out, weightileloc, tp=tracer_out, dchi2=dchi2, zmin=zmin, zmax=zmax_arr, use_map_veto=args.use_map_veto, data=dat_inallbins)
+            ct.mkclusdat(args.outdir+'/'+tracer_out, weightileloc, tp=tracer_out, dchi2=dchi2, zmin=zmin, zmax=zmax_arr, use_map_veto=args.use_map_veto, data=dat_inallbins, extracols=extracols)
+        write_clus_header_stats(fout_clus, args.splitprop, sample_meta=sample_meta)
 
     nzcompmd = 'ran'
     if args.compmd == 'altmtl':
@@ -532,7 +572,8 @@ for i in range(len(mag_bins)-1):
                 tracer_out = args.input_tracer + "_CEN" + f'_mag{mag_bins[i]:.2f}to{mag_bins[i+1]:.2f}' + f'_{qsf_label}' + f'_{args.splitprop}{prop_bins[j]:.3f}to{prop_bins[j+1]:.3f}'
                 fout = args.outdir+'/'+tracer_out+'_full'+args.use_map_veto+'.dat.fits'
 
-                process_sample(tracer_out, fout, dat_inallbins, zmin, zmax, zmax_arr)
+                sample_meta = {'QSFLAG': qsf_label, 'MAGLO': float(mag_bins[i]), 'MAGHI': float(mag_bins[i+1]), 'ZMINSAMP': zmin, 'ZMAXSAMP': zmax, 'PROPLO': float(prop_bins[j]), 'PROPHI': float(prop_bins[j+1])}
+                process_sample(tracer_out, fout, dat_inallbins, zmin, zmax, zmax_arr, sample_meta=sample_meta)
 
         else:
             common.printlog(f'Mag bin {i}: {mag_bins[i]:.4f} to {mag_bins[i+1]:.4f}, ({qsf_label}) count: {len(dat_inqbin)}', logger)
@@ -543,7 +584,8 @@ for i in range(len(mag_bins)-1):
 
             zmax_arr = np.where(dat_inqbin['PHOTSYS'] == b'N', zmax_N, zmax_S)
 
-            process_sample(tracer_out, fout, dat_inqbin, zmin, zmax, zmax_arr)
+            sample_meta = {'QSFLAG': qsf_label, 'MAGLO': float(mag_bins[i]), 'MAGHI': float(mag_bins[i+1]), 'ZMINSAMP': zmin, 'ZMAXSAMP': zmax}
+            process_sample(tracer_out, fout, dat_inqbin, zmin, zmax, zmax_arr, sample_meta=sample_meta)
 
 
 
