@@ -21,8 +21,6 @@ from LSS.globals import main
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--zmin",help="a redshift cut to apply when making clustering catalogs, default is to apply what is in globals.py", default=None, type=float)
-parser.add_argument("--zmax",help="a redshift cut to apply when making clustering catalogs, default is to apply what is in globals.py", default=None, type=float)
 parser.add_argument("--overwrite",help="whether to overwrite existing files", choices=['n', 'y'], default='n')
 
 #arguments to find input data
@@ -56,7 +54,8 @@ parser.add_argument("--imsys_zbin", choices=['n', 'y', 'hi'], help="use separate
 parser.add_argument("--par", choices=['y', 'n'], help="run different random numbers in parallel?", default='y')
 
 #options for the third-level (property) adaptive binning, applied within each mag bin x quiescent/star-forming split
-parser.add_argument("--magbins", help="number of adaptive bins to use for the mag binning (first-level split)", type=int, default=10)
+parser.add_argument("--centrals", choices=['n', 'y'], help="whether to only use central galaxies for the third-level adaptive binning", default='y')
+parser.add_argument("--magbins", help="file specifying the mag bins to use, or number of magbins to create dynamically", type=str, default='/global/homes/i/ianw89/SelfCalGroupFinder/py/parameters/bgs_y3/magbins.dat')
 parser.add_argument("--splitprop", help="name of the column to use for the adaptive sub-binning done within each mag bin x quiescent/star-forming split", type=str, default=None)
 parser.add_argument("--splitpropfile", help="path to a file with TARGETID and the --splitprop column to merge onto the group catalog", type=str, default='/global/cfs/cdirs/desi/users/ianw89/private/DATA/BGS_LOA/ian_BGS_Y3_merged.fits')
 
@@ -469,7 +468,8 @@ grpcat = Table(fitsio.read(path, columns=['TARGETID', 'Z_ASSIGNED_FLAG', 'ABS_MA
 common.printlog(f'{len(grpcat)} group catalog rows read from {path}', logger)
 
 sel = grpcat['Z_ASSIGNED_FLAG'] == 0 # DESI spectroscopic data only
-sel &= ~grpcat['IS_SAT'] # Centrals only
+if args.centrals == 'y':
+    sel &= ~grpcat['IS_SAT'] # Centrals only
 grpcat = grpcat[sel]
 grpcat.remove_columns(['Z_ASSIGNED_FLAG', 'IS_SAT'])
 common.printlog(f'{len(grpcat)} group catalog rows after cuts (DESI spec + centrals only)', logger)
@@ -485,9 +485,13 @@ if args.splitprop is not None and args.splitprop not in fulldat.colnames:
     fulldat = join(fulldat, extra, keys=['TARGETID'], join_type="inner")
     common.printlog(f'{len(fulldat)} full data rows after joining with {args.splitprop} property file', logger)
 
-# Use my automated binnings strategy
-mag_bins = common.make_adaptive_density_bins(fulldat['ABS_MAG_R'], n_bins=args.magbins, n_tail=0, alpha=0.5, limit=0.01)
-mag_bins = np.round(mag_bins, 2)
+if args.magbins.isdigit():
+    # Use my automated binnings strategy
+    mag_bins = common.make_adaptive_density_bins(fulldat['ABS_MAG_R'], n_bins=int(args.magbins), n_tail=0, alpha=0.5, limit=0.01)
+    mag_bins = np.round(mag_bins, 2)
+else:
+    # Use the file specified
+    mag_bins = np.loadtxt(args.magbins)
 
 def get_binned_mean(data, bin_edges):
     """Bin the data using the provided edges and compute the mean value in each bin."""
@@ -501,13 +505,11 @@ def get_binned_mean(data, bin_edges):
     # Ignore data to the left of leftmost edge and right of rightmost edge
     return means[1:len(bin_edges)]
 
-mag_bins_means = get_binned_mean(fulldat['ABS_MAG_R'], mag_bins)
-
 # Save off the numpy array of mag_bins
-np.save(args.outdir+'/'+args.input_tracer+'_mag_bins'+str(args.magbins)+'.npy', mag_bins)
-np.save(args.outdir+'/'+args.input_tracer+'_mag_bins'+str(args.magbins)+'_means.npy', mag_bins_means)
+#np.save(args.outdir+'/'+args.input_tracer+'_mag_bins'+str(args.magbins)+'.npy', mag_bins)
 
-for i in range(len(mag_bins)-1):
+#for i in range(len(mag_bins)-1):
+for i in [0]:  # TODO TEMP just do 1
     mag_mask = (fulldat['ABS_MAG_R'] >= mag_bins[i]) & (fulldat['ABS_MAG_R'] < mag_bins[i+1])
     dat_inmagbin = fulldat[mag_mask]
 
@@ -557,8 +559,8 @@ for i in range(len(mag_bins)-1):
             prop_bins = np.round(prop_bins, 3)
             prop_bins_means = get_binned_mean(prop_in_bin, prop_bins)
 
-            np.save(args.outdir+'/'+args.input_tracer+'_'+args.splitprop+'_bins_formagbin'+str(i)+'_'+qsf_label+'.npy', prop_bins)
-            np.save(args.outdir+'/'+args.input_tracer+'_'+args.splitprop+'_bins_means_formagbin'+str(i)+'_'+qsf_label+'.npy', prop_bins_means)
+            np.save(args.outdir+'/'+args.input_tracer+('_CEN' if args.centrals == 'y' else '')+'_'+args.splitprop+'_bins_formagbin'+str(i)+'_'+qsf_label+'.npy', prop_bins)
+            np.save(args.outdir+'/'+args.input_tracer+('_CEN' if args.centrals == 'y' else '')+'_'+args.splitprop+'_bins_means_formagbin'+str(i)+'_'+qsf_label+'.npy', prop_bins_means)
 
             for j in range(len(prop_bins)-1):
                 prop_mask = (prop_in_bin >= prop_bins[j]) & (prop_in_bin < prop_bins[j+1])
@@ -569,7 +571,7 @@ for i in range(len(mag_bins)-1):
                 zmax_arr = np.where(dat_inallbins['PHOTSYS'] == b'N', zmax_N, zmax_S)
 
                 #write output to new "full" catalog at your defined location
-                tracer_out = args.input_tracer + "_CEN" + f'_mag{mag_bins[i]:.2f}to{mag_bins[i+1]:.2f}' + f'_{qsf_label}' + f'_{args.splitprop}{prop_bins[j]:.3f}to{prop_bins[j+1]:.3f}'
+                tracer_out = args.input_tracer + ('_CEN' if args.centrals == 'y' else '') + f'_mag{mag_bins[i]:.2f}to{mag_bins[i+1]:.2f}' + f'_{qsf_label}' + f'_{args.splitprop}{prop_bins[j]:.3f}to{prop_bins[j+1]:.3f}'
                 fout = args.outdir+'/'+tracer_out+'_full'+args.use_map_veto+'.dat.fits'
 
                 sample_meta = {'QSFLAG': qsf_label, 'MAGLO': float(mag_bins[i]), 'MAGHI': float(mag_bins[i+1]), 'ZMINSAMP': zmin, 'ZMAXSAMP': zmax, 'PROPLO': float(prop_bins[j]), 'PROPHI': float(prop_bins[j+1])}
@@ -579,7 +581,7 @@ for i in range(len(mag_bins)-1):
             common.printlog(f'Mag bin {i}: {mag_bins[i]:.4f} to {mag_bins[i+1]:.4f}, ({qsf_label}) count: {len(dat_inqbin)}', logger)
 
             #write output to new "full" catalog at your defined location
-            tracer_out = args.input_tracer + "_CEN" + f'_mag{mag_bins[i]:.2f}to{mag_bins[i+1]:.2f}' + f'_{qsf_label}'
+            tracer_out = args.input_tracer + ('_CEN' if args.centrals == 'y' else '') + f'_mag{mag_bins[i]:.2f}to{mag_bins[i+1]:.2f}' + f'_{qsf_label}'
             fout = args.outdir+'/'+tracer_out+'_full'+args.use_map_veto+'.dat.fits'
 
             zmax_arr = np.where(dat_inqbin['PHOTSYS'] == b'N', zmax_N, zmax_S)

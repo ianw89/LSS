@@ -210,7 +210,7 @@ if args.mkfulldat == 'y':
         grpcat_sel &= ~grpcat['IS_SAT'] # Centrals only
     grpcat = grpcat[grpcat_sel]
     grpcat.remove_columns(['Z_ASSIGNED_FLAG', 'IS_SAT'])
-    common.printlog(f'{len(grpcat)} group catalog rows after cuts (DESI spec + centrals only)', logger)
+    common.printlog(f'{len(grpcat)} group catalog rows after cuts (DESI spec{", centrals only" if args.centrals == "y" else ", all"})', logger)
 
     # Merge with fulldat, inner join
     fulldat = join(fulldat, grpcat, keys=['TARGETID'], join_type="inner")

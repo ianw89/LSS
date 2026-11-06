@@ -125,7 +125,7 @@ def compute_correlation_function(corr_type, edges, distance, nthreads=8, gpu=Fal
 
         # Guard: skip subsamples too small for pycorr. Crashes when there are 0 pairs in a bin maybe?
         # Annoyingly because we evaluate on NGC and SGC seperately, 10000 gals into 3 samples and then split into NGC/SGC often give less than this.
-        if len(data_positions1[0]) < 900: # BUG TODO. 900 works OK, 800 seems to fail sometimes.
+        if len(data_positions1[0]) < 1500: # BUG TODO. 900 works OK for 64 jackknifes. 
             return 
 
         if not autocorr:
@@ -389,7 +389,6 @@ if __name__ == '__main__':
     parser.add_argument('--nthreads', help='number of threads (defaults to 4 if --gpu else 128)', type=int, default=None)
     parser.add_argument('--outdir', help='base directory for output (default: SCRATCH)', type=str, default=None)
     #parser.add_argument('--mpi', help='whether to use MPI', action='store_true', default=False)
-    parser.add_argument('--rebinning', help='whether to rebin the xi or just keep the original .npy file', default='y')
     # arguments relevant for when running directly from full catalogs.
     #only relevant for reconstruction
     parser.add_argument('--rec_type', help='reconstruction algorithm + reconstruction convention, but only if included in the catalog filename between dots, otherwise leave blank', choices=['IFTPrecsym', 'IFTPreciso','IFTrecsym', 'IFTreciso', 'MGrecsym', 'MGreciso'], type=str, default=None)
@@ -410,11 +409,7 @@ if __name__ == '__main__':
     if nthreads is None:
         if gpu: nthreads = 4
         else: nthreads = 128
-            
-    if args.rebinning == 'n':
-        args.rebinning = False
-    if args.rebinning == 'y':
-        args.rebinning = True
+    
 
     if args.ndens_cov == 'y' and args.njack > 1:
         args.ndens_cov = True
@@ -472,11 +467,6 @@ if __name__ == '__main__':
 
     if os.path.exists(args.bin_type):
         bintype_str = 'custom'
-        rebinning_factors = [1]
-        pi_rebinning_factors = [1]
-    else:
-        rebinning_factors = [1, 4, 5, 10] if 'lin' in args.bin_type else [1, 2, 4]
-        pi_rebinning_factors = [1, 4, 5, 10] if 'log' in args.bin_type else [1]
 
     logger.info('Checking for clustering catalogs in {} for tracer {}.'.format(cat_dir, tracer))
 
@@ -570,10 +560,9 @@ if __name__ == '__main__':
                             result.save(fn_nscomb)
                         all_regions.append('NScomb')
                     if 'NGC' in regions and 'SGC' in regions:  # let's combine
-                        result = sum([TwoPointCorrelationFunction.load(
-                                    corr_fn(file_type='npy', region=region, out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs)).normalize() for region in ['NGC', 'SGC']])
                         fn_gccomb = corr_fn(file_type='npy', region='GCcomb', out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs)
                         if not os.path.exists(fn_gccomb) or args.overwrite == 'y':
+                            result = sum([TwoPointCorrelationFunction.load(corr_fn(file_type='npy', region=region, out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs)).normalize() for region in ['NGC', 'SGC']])
                             result.save(fn_gccomb)
                         all_regions.append('GCcomb')
                         if args.ndens_cov:
@@ -581,34 +570,6 @@ if __name__ == '__main__':
                             if not os.path.exists(fn_ndens_gccomb) or args.overwrite == 'y':
                                 (wsum_data, wsum_randoms) = sum([np.load(corr_fn(file_type='ndens', region=region, out_dir=os.path.join(out_dir, corr_type), **base_file_kwargs)) for region in ['NGC', 'SGC']])
                                 np.save(fn_ndens_gccomb, (wsum_data, wsum_randoms))
-
-                    if args.rebinning: # TODO overwrite check here too
-                        for region in all_regions:
-                            txt_kwargs = base_file_kwargs.copy()
-                            txt_kwargs.update(region=region, out_dir=os.path.join(out_dir, corr_type))
-                            result = TwoPointCorrelationFunction.load(corr_fn(file_type='npy', **txt_kwargs))
-                            for factor in rebinning_factors:
-                                #result = TwoPointEstimator.load(fn)
-                                rebinned = result[:(result.shape[0] // factor) * factor:factor]
-                                txt_kwargs.update(bin_type=bintype_str+str(factor))
-                                if corr_type == 'smu':
-                                    fn_txt = corr_fn(file_type='xismu', **txt_kwargs)
-                                    rebinned.save_txt(fn_txt)
-                                    fn_txt = corr_fn(file_type='xipoles', **txt_kwargs)
-                                    rebinned.save_txt(fn_txt, ells=(0, 2, 4), ignore_nan=True)
-                                    fn_txt = corr_fn(file_type='xiwedges', **txt_kwargs)
-                                    rebinned.save_txt(fn_txt, wedges=(-1., -2./3, -1./3, 0., 1./3, 2./3, 1.))
-                                elif corr_type == 'rppi':
-                                    fn_txt = corr_fn(file_type='wp', **txt_kwargs)
-                                    rebinned.save_txt(fn_txt, pimax=40.)
-                                    for pifac in pi_rebinning_factors:
-                                        rebinned = result[:(result.shape[0]//factor)*factor:factor,:(result.shape[1]//pifac)*pifac:pifac]
-                                        txt_kwargs.update(bin_type=bintype_str+str(factor)+'_'+str(pifac))
-                                        fn_txt = corr_fn(file_type='xirppi', **txt_kwargs)
-                                        rebinned.save_txt(fn_txt)
-                                elif corr_type == 'theta':
-                                    fn_txt = corr_fn(file_type='theta', **txt_kwargs)
-                                    rebinned.save_txt(fn_txt)
 
 
 
