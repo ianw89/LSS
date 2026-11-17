@@ -58,6 +58,7 @@ parser.add_argument("--centrals", choices=['n', 'y'], help="whether to only use 
 parser.add_argument("--magbins", help="file specifying the mag bins to use, or number of magbins to create dynamically", type=str, default='/global/homes/i/ianw89/SelfCalGroupFinder/py/parameters/bgs_y3/magbins.dat')
 parser.add_argument("--splitprop", help="name of the column to use for the adaptive sub-binning done within each mag bin x quiescent/star-forming split", type=str, default=None)
 parser.add_argument("--splitpropfile", help="path to a file with TARGETID and the --splitprop column to merge onto the group catalog", type=str, default='/global/cfs/cdirs/desi/users/ianw89/private/DATA/BGS_LOA/ian_BGS_Y3_merged.fits')
+parser.add_argument("--usesavedpropbins", choices=['n', 'y'], help="whether to use previously saved property bins instead of recalculating them", default='n')
 
 setup_logging()
 
@@ -463,6 +464,8 @@ fulldat = Table(fitsio.read(dirin+args.input_tracer+'_full'+args.use_map_veto+'.
 common.printlog(f'{len(fulldat)} full data rows read from {dirin+args.input_tracer}_full{args.use_map_veto}.dat.fits', logger)
 
 # Use group catalog to get centrals and quality cuts
+#   Note, this version is not exactly the final DR1 methodology version (v0.9) but quite close
+#   Because this is an internal version just for this project (Project 712) this is OK. Better to be consistent and always use v0.8 than switch half way through.
 path = '/global/cfs/cdirs/desi/users/ianw89/groupcatalogs/BGS_Y3/v0.8/GROUP_CATALOG_BGS_Y3_1PASS_v0.8.fits'
 grpcat = Table(fitsio.read(path, columns=['TARGETID', 'Z_ASSIGNED_FLAG', 'ABS_MAG_R', 'G_R', 'IS_SAT', 'QUIESCENT']))
 common.printlog(f'{len(grpcat)} group catalog rows read from {path}', logger)
@@ -489,9 +492,11 @@ if args.magbins.isdigit():
     # Use my automated binnings strategy
     mag_bins = common.make_adaptive_density_bins(fulldat['ABS_MAG_R'], n_bins=int(args.magbins), n_tail=0, alpha=0.5, limit=0.01)
     mag_bins = np.round(mag_bins, 2)
+    common.printlog(f'Created new adaptive mag bins: {mag_bins}', logger)
 else:
     # Use the file specified
     mag_bins = np.loadtxt(args.magbins)
+    common.printlog(f'Loaded mag bins from file: {mag_bins}', logger)
 
 def get_binned_mean(data, bin_edges):
     """Bin the data using the provided edges and compute the mean value in each bin."""
@@ -508,8 +513,7 @@ def get_binned_mean(data, bin_edges):
 # Save off the numpy array of mag_bins
 #np.save(args.outdir+'/'+args.input_tracer+'_mag_bins'+str(args.magbins)+'.npy', mag_bins)
 
-#for i in range(len(mag_bins)-1):
-for i in [0]:  # TODO TEMP just do 1
+for i in range(len(mag_bins)-1):
     mag_mask = (fulldat['ABS_MAG_R'] >= mag_bins[i]) & (fulldat['ABS_MAG_R'] < mag_bins[i+1])
     dat_inmagbin = fulldat[mag_mask]
 
@@ -526,13 +530,8 @@ for i in [0]:  # TODO TEMP just do 1
         common.printlog(f'  zmin = {zmin}, zmax_S = {zmax_S}, zmax_N = {zmax_N}', logger)
 
         if args.splitprop is not None:
-            # Some properties we should go all the way to the extremal values, but others we should not
-            limit = 0.01
-
             prop_in_bin = dat_inqbin[args.splitprop]
 
-            if args.splitprop == 'c9050':
-                limit = 0.0
             if args.splitprop == 'LOGSSFR':
                 dat_inqbin[args.splitprop][prop_in_bin < -16] = -16 # A floor value of -16 for finding bins since its ~0 SFR when this low, I assume differences are noise
 
@@ -543,24 +542,43 @@ for i in [0]:  # TODO TEMP just do 1
             # Check how much data is in this mag x QvsSF bin and print it
             common.printlog(f'Mag bin {i}: {mag_bins[i]:.2f} to {mag_bins[i+1]:.2f}, ({qsf_label}) count: {len(prop_in_bin)}', logger)
 
-            # Faintest Q bin gets ~10000 galaxies, and the uneven binning can make some samples so small (< 1000 or so) that
-            # pycorr crashes. Let's just go for 3 bins in that case
-            if len(prop_in_bin) < 15000:
-                n_bins = 3
-            else:
-                n_bins = 5
+            # Now for the propert binning
 
-            prop_bins = common.make_adaptive_density_bins(prop_in_bin, n_bins=n_bins, n_tail=0, alpha=0.5, limit=limit)
+            # Load saved property bins if requested
+            if args.usesavedpropbins == 'y':
+                prop_bins = np.load(os.path.join(
+                    '/global/cfs/cdirs/desi/users/ianw89/clustering712/DA2/LSS/loa-v1/LSScats/v1.1/v0.3', 
+                    f'BGS_BRIGHT_{args.splitprop}_bins_formagbin{i}_{qsf_label}.npy')) 
+                common.printlog(f'Loaded property bins from file: {prop_bins}', logger)
+            
+            # Or use the adaptive binning approach 
+            else:  
+                # Some properties we should go all the way to the extremal values, but others we should not
+                limit = 0.01
 
-            if args.splitprop == 'LOGSSFR':
-                # Change the label for the leftmost bin to -99 instead of ~ -16 for clarity
-                prop_bins[0] = -99
+                if args.splitprop == 'c9050':
+                    limit = 0.0
 
-            prop_bins = np.round(prop_bins, 3)
-            prop_bins_means = get_binned_mean(prop_in_bin, prop_bins)
+                # Faintest Q bin gets ~10000 galaxies, and the uneven binning can make some samples so small (< 1000 or so) that
+                # pycorr crashes. Let's just go for 3 bins in that case
+                if len(prop_in_bin) < 15000:
+                    n_bins = 3
+                else:
+                    n_bins = 5
 
-            np.save(args.outdir+'/'+args.input_tracer+('_CEN' if args.centrals == 'y' else '')+'_'+args.splitprop+'_bins_formagbin'+str(i)+'_'+qsf_label+'.npy', prop_bins)
-            np.save(args.outdir+'/'+args.input_tracer+('_CEN' if args.centrals == 'y' else '')+'_'+args.splitprop+'_bins_means_formagbin'+str(i)+'_'+qsf_label+'.npy', prop_bins_means)
+                prop_bins = common.make_adaptive_density_bins(prop_in_bin, n_bins=n_bins, n_tail=0, alpha=0.5, limit=limit)
+
+                if args.splitprop == 'LOGSSFR':
+                    # Change the label for the leftmost bin to -99 instead of ~ -16 for clarity
+                    prop_bins[0] = -99
+
+                prop_bins = np.round(prop_bins, 3)
+                common.printlog(f'Created new property bins for {args.splitprop}: {prop_bins}', logger)
+
+                prop_bins_means = get_binned_mean(prop_in_bin, prop_bins)
+
+                np.save(args.outdir+'/'+args.input_tracer+('_CEN' if args.centrals == 'y' else '')+'_'+args.splitprop+'_bins_formagbin'+str(i)+'_'+qsf_label+'.npy', prop_bins)
+                np.save(args.outdir+'/'+args.input_tracer+('_CEN' if args.centrals == 'y' else '')+'_'+args.splitprop+'_bins_means_formagbin'+str(i)+'_'+qsf_label+'.npy', prop_bins_means)
 
             for j in range(len(prop_bins)-1):
                 prop_mask = (prop_in_bin >= prop_bins[j]) & (prop_in_bin < prop_bins[j+1])
